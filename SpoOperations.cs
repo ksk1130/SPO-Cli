@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
 using Microsoft.SharePoint.Client;
 using Microsoft.SharePoint.Client.Utilities;
@@ -55,9 +57,15 @@ internal sealed class SpoOperations
         var fileUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
         var file = context.Web.GetFileByServerRelativeUrl(fileUrl);
         context.Load(file, f => f.Length);
-        var streamResult = file.OpenBinaryStream();
         context.ExecuteQuery();
-        using var sourceStream = streamResult.Value;
+        var token = await _auth.AcquireTokenAsync(siteUrl, interactive: false);
+        var encodedPath = Uri.EscapeDataString(fileUrl);
+        var downloadUrl = $"{siteUrl}/_api/web/GetFileByServerRelativeUrl('{encodedPath}')/$value";
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        using var sourceStream = await response.Content.ReadAsStreamAsync();
 
         var localPath = ResolveLocalPathForDownload(fromUrl, toPath);
         var directory = Path.GetDirectoryName(localPath);
@@ -67,7 +75,8 @@ internal sealed class SpoOperations
         }
 
         using var targetStream = System.IO.File.Create(localPath);
-        CopyStreamWithProgress(sourceStream, targetStream, file.Length, Path.GetFileName(localPath));
+        var totalBytes = response.Content.Headers.ContentLength ?? file.Length;
+        CopyStreamWithProgress(sourceStream, targetStream, totalBytes, Path.GetFileName(localPath));
     }
 
     /// <summary>
@@ -104,6 +113,7 @@ internal sealed class SpoOperations
 
         folder.Files.Add(info);
         context.ExecuteQuery();
+        Console.Error.WriteLine();
     }
 
     /// <summary>
@@ -207,6 +217,8 @@ internal sealed class SpoOperations
                 lastPercent = percent;
             }
         }
+
+        Console.Error.WriteLine();
     }
 
     /// <summary>
@@ -219,7 +231,7 @@ internal sealed class SpoOperations
         var bar = new string('#', filled) + new string('-', barWidth - filled);
         var currentMB = current / 1024.0 / 1024.0;
         var totalMB = total / 1024.0 / 1024.0;
-        Console.Error.WriteLine($"{fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.Write($"\r{fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
         Console.Error.Flush();
     }
 }
@@ -274,7 +286,7 @@ internal sealed class ProgressStream : Stream
         var bar = new string('#', filled) + new string('-', barWidth - filled);
         var currentMB = _bytesRead / 1024.0 / 1024.0;
         var totalMB = _totalBytes / 1024.0 / 1024.0;
-        Console.Error.WriteLine($"{_fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.Write($"\r{_fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
         Console.Error.Flush();
     }
 
