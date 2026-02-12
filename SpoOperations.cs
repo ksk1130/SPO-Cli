@@ -54,8 +54,8 @@ internal sealed class SpoOperations
 
         var fileUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
         var file = context.Web.GetFileByServerRelativeUrl(fileUrl);
+        context.Load(file, f => f.Length);
         var streamResult = file.OpenBinaryStream();
-        context.Load(file);
         context.ExecuteQuery();
         using var sourceStream = streamResult.Value;
 
@@ -67,7 +67,7 @@ internal sealed class SpoOperations
         }
 
         using var targetStream = System.IO.File.Create(localPath);
-        sourceStream.CopyTo(targetStream);
+        CopyStreamWithProgress(sourceStream, targetStream, file.Length, Path.GetFileName(localPath));
     }
 
     /// <summary>
@@ -92,16 +92,19 @@ internal sealed class SpoOperations
         }
 
         var folder = context.Web.GetFolderByServerRelativeUrl(folderPath);
-        using var stream = System.IO.File.OpenRead(fromPath);
+        var fileInfo = new FileInfo(fromPath);
+        using var sourceStream = System.IO.File.OpenRead(fromPath);
+        using var progressStream = new ProgressStream(sourceStream, fileInfo.Length, Path.GetFileName(fromPath));
         var info = new FileCreationInformation
         {
-            ContentStream = stream,
+            ContentStream = progressStream,
             Url = Path.GetFileName(serverRelative),
             Overwrite = true
         };
 
         folder.Files.Add(info);
         context.ExecuteQuery();
+        Console.WriteLine();
     }
 
     /// <summary>
@@ -180,5 +183,113 @@ internal sealed class SpoOperations
             ? UrlHelpers.GetFileName(fromPath)
             : Path.GetFileName(fromPath);
         return UrlHelpers.CombineUrl(toUrl, fileName);
+    }
+
+    /// <summary>
+    /// ストリームをコピーしながら進捗表示する。
+    /// </summary>
+    private static void CopyStreamWithProgress(Stream source, Stream destination, long totalBytes, string fileName)
+    {
+        const int bufferSize = 81920;
+        var buffer = new byte[bufferSize];
+        long totalRead = 0;
+        int bytesRead;
+        var lastPercent = -1;
+
+        while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            destination.Write(buffer, 0, bytesRead);
+            totalRead += bytesRead;
+
+            var percent = (int)((double)totalRead / totalBytes * 100);
+            if (percent != lastPercent)
+            {
+                DisplayProgress(fileName, totalRead, totalBytes, percent);
+                lastPercent = percent;
+            }
+        }
+
+        Console.WriteLine();
+    }
+
+    /// <summary>
+    /// 進捗バーを表示する。
+    /// </summary>
+    private static void DisplayProgress(string fileName, long current, long total, int percent)
+    {
+        const int barWidth = 30;
+        var filled = (int)(barWidth * percent / 100);
+        var bar = new string('#', filled) + new string('-', barWidth - filled);
+        var currentMB = current / 1024.0 / 1024.0;
+        var totalMB = total / 1024.0 / 1024.0;
+        Console.Write($"\r{fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+    }
+}
+
+/// <summary>
+/// 進捗表示付きストリームラッパー（アップロード用）。
+/// </summary>
+internal sealed class ProgressStream : Stream
+{
+    private readonly Stream _baseStream;
+    private readonly long _totalBytes;
+    private readonly string _fileName;
+    private long _bytesRead;
+    private int _lastPercent = -1;
+
+    public ProgressStream(Stream baseStream, long totalBytes, string fileName)
+    {
+        _baseStream = baseStream;
+        _totalBytes = totalBytes;
+        _fileName = fileName;
+    }
+
+    public override bool CanRead => _baseStream.CanRead;
+    public override bool CanSeek => _baseStream.CanSeek;
+    public override bool CanWrite => false;
+    public override long Length => _baseStream.Length;
+    public override long Position
+    {
+        get => _baseStream.Position;
+        set => _baseStream.Position = value;
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        var bytesRead = _baseStream.Read(buffer, offset, count);
+        _bytesRead += bytesRead;
+
+        var percent = _totalBytes > 0 ? (int)((double)_bytesRead / _totalBytes * 100) : 0;
+        if (percent != _lastPercent)
+        {
+            DisplayProgress(percent);
+            _lastPercent = percent;
+        }
+
+        return bytesRead;
+    }
+
+    private void DisplayProgress(int percent)
+    {
+        const int barWidth = 30;
+        var filled = (int)(barWidth * percent / 100);
+        var bar = new string('#', filled) + new string('-', barWidth - filled);
+        var currentMB = _bytesRead / 1024.0 / 1024.0;
+        var totalMB = _totalBytes / 1024.0 / 1024.0;
+        Console.Write($"\r{_fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+    }
+
+    public override void Flush() => _baseStream.Flush();
+    public override long Seek(long offset, SeekOrigin origin) => _baseStream.Seek(offset, origin);
+    public override void SetLength(long value) => _baseStream.SetLength(value);
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _baseStream.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }
