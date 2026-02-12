@@ -104,7 +104,6 @@ internal sealed class SpoOperations
 
         folder.Files.Add(info);
         context.ExecuteQuery();
-        Console.WriteLine();
     }
 
     /// <summary>
@@ -208,8 +207,6 @@ internal sealed class SpoOperations
                 lastPercent = percent;
             }
         }
-
-        Console.WriteLine();
     }
 
     /// <summary>
@@ -222,7 +219,8 @@ internal sealed class SpoOperations
         var bar = new string('#', filled) + new string('-', barWidth - filled);
         var currentMB = current / 1024.0 / 1024.0;
         var totalMB = total / 1024.0 / 1024.0;
-        Console.Write($"\r{fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.WriteLine($"{fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.Flush();
     }
 }
 
@@ -276,7 +274,8 @@ internal sealed class ProgressStream : Stream
         var bar = new string('#', filled) + new string('-', barWidth - filled);
         var currentMB = _bytesRead / 1024.0 / 1024.0;
         var totalMB = _totalBytes / 1024.0 / 1024.0;
-        Console.Write($"\r{_fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.WriteLine($"{_fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.Flush();
     }
 
     public override void Flush() => _baseStream.Flush();
