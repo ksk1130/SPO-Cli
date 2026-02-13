@@ -54,7 +54,10 @@ internal sealed class SpoAuth
     /// <summary>
     /// トークン取得結果（ExpiresOn含む）を返す。
     /// </summary>
-    public async Task<AuthenticationResult> AcquireTokenResultAsync(string siteUrl, bool interactive)
+    public async Task<AuthenticationResult> AcquireTokenResultAsync(
+        string siteUrl,
+        bool interactive,
+        Prompt? prompt = null)
     {
         var scopes = new[] { $"{UrlHelpers.GetTenantRoot(siteUrl)}/.default" };
         var accounts = await _app.GetAccountsAsync();
@@ -76,8 +79,9 @@ internal sealed class SpoAuth
                 throw;
             }
 
+            var effectivePrompt = prompt ?? Prompt.SelectAccount;
             return await _app.AcquireTokenInteractive(scopes)
-                .WithPrompt(Prompt.SelectAccount)
+                .WithPrompt(effectivePrompt)
                 .ExecuteAsync();
         }
     }

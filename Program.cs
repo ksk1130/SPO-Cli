@@ -91,7 +91,7 @@ static class Program
 
 		var config = SpoCliConfig.Load();
 		var auth = await SpoAuth.CreateAsync(config);
-		await auth.AcquireTokenAsync(siteUrl, interactive: true);
+		await auth.AcquireTokenResultAsync(siteUrl, interactive: true, prompt: Prompt.Login);
 
 		var settings = SpoCliSettings.Load();
 		settings.DefaultRoot = siteUrl;
