@@ -89,9 +89,18 @@ static class Program
 			}
 		}
 
+		// MSALキャッシュを削除してゼロからスタート
+		var cacheDir = Path.Combine(
+			Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+			"spo-cli");
+		if (Directory.Exists(cacheDir))
+		{
+			Directory.Delete(cacheDir, recursive: true);
+		}
+
 		var config = SpoCliConfig.Load();
 		var auth = await SpoAuth.CreateAsync(config);
-		await auth.AcquireTokenResultAsync(siteUrl, interactive: true, prompt: Prompt.Login);
+		await auth.AcquireTokenResultAsync(siteUrl, interactive: true, prompt: Prompt.ForceLogin);
 
 		var settings = SpoCliSettings.Load();
 		settings.DefaultRoot = siteUrl;
