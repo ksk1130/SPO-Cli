@@ -3,6 +3,7 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
+using Microsoft.Identity.Client;
 using Microsoft.SharePoint.Client;
 using Microsoft.SharePoint.Client.Utilities;
 
@@ -51,6 +52,12 @@ internal sealed class SpoOperations
     /// </summary>
     public async Task DownloadAsync(string fromUrl, string toPath)
     {
+        if (fromUrl.EndsWith("/", StringComparison.Ordinal))
+        {
+            await DownloadFolderFilesAsync(fromUrl, toPath);
+            return;
+        }
+
         var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
         var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
         using var context = await _auth.CreateContextAsync(
@@ -61,16 +68,8 @@ internal sealed class SpoOperations
 
         var fileUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
         var file = context.Web.GetFileByServerRelativeUrl(fileUrl);
-        context.Load(file, f => f.Length);
+        context.Load(file, f => f.Length, f => f.Name);
         context.ExecuteQuery();
-        var token = tokenResult.AccessToken;
-        var encodedPath = Uri.EscapeDataString(fileUrl);
-        var downloadUrl = $"{siteUrl}/_api/web/GetFileByServerRelativeUrl('{encodedPath}')/$value";
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-        using var sourceStream = await response.Content.ReadAsStreamAsync();
 
         var localPath = ResolveLocalPathForDownload(fromUrl, toPath);
         var directory = Path.GetDirectoryName(localPath);
@@ -79,9 +78,78 @@ internal sealed class SpoOperations
             Directory.CreateDirectory(directory);
         }
 
+        await DownloadFileByServerRelativeUrlAsync(
+            siteUrl,
+            fileUrl,
+            localPath,
+            file.Length,
+            file.Name,
+            tokenResult);
+    }
+
+    /// <summary>
+    /// フォルダ直下のファイルを再帰せずにダウンロードする。
+    /// </summary>
+    private async Task DownloadFolderFilesAsync(string folderUrl, string toPath)
+    {
+        if (!Directory.Exists(toPath)
+            && !toPath.EndsWith(Path.DirectorySeparatorChar)
+            && !toPath.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            throw new InvalidOperationException("Folder download requires a local directory path.");
+        }
+
+        Directory.CreateDirectory(toPath);
+
+        var siteUrl = UrlHelpers.GetSiteUrl(folderUrl);
+        var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
+        using var context = await _auth.CreateContextAsync(
+            siteUrl,
+            interactive: false,
+            showExpiresOn: true,
+            tokenResult: tokenResult);
+
+        var serverRelativeFolder = UrlHelpers.GetServerRelativeUrl(folderUrl);
+        var folder = context.Web.GetFolderByServerRelativeUrl(serverRelativeFolder);
+        context.Load(folder, f => f.Name);
+        context.Load(folder.Files, files => files.Include(f => f.Name, f => f.Length, f => f.ServerRelativeUrl));
+        context.ExecuteQuery();
+
+        foreach (var file in folder.Files)
+        {
+            var localPath = Path.Combine(toPath, file.Name);
+            await DownloadFileByServerRelativeUrlAsync(
+                siteUrl,
+                file.ServerRelativeUrl,
+                localPath,
+                file.Length,
+                file.Name,
+                tokenResult);
+        }
+    }
+
+    /// <summary>
+    /// サーバー相対URLのファイルをRESTでストリーミングダウンロードする。
+    /// </summary>
+    private async Task DownloadFileByServerRelativeUrlAsync(
+        string siteUrl,
+        string serverRelativeUrl,
+        string localPath,
+        long fileLength,
+        string fileName,
+        AuthenticationResult tokenResult)
+    {
+        var encodedPath = Uri.EscapeDataString(serverRelativeUrl);
+        var downloadUrl = $"{siteUrl}/_api/web/GetFileByServerRelativeUrl('{encodedPath}')/$value";
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokenResult.AccessToken);
+        using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        using var sourceStream = await response.Content.ReadAsStreamAsync();
+
         using var targetStream = System.IO.File.Create(localPath);
-        var totalBytes = response.Content.Headers.ContentLength ?? file.Length;
-        CopyStreamWithProgress(sourceStream, targetStream, totalBytes, Path.GetFileName(localPath));
+        var totalBytes = response.Content.Headers.ContentLength ?? fileLength;
+        CopyStreamWithProgress(sourceStream, targetStream, totalBytes, fileName);
     }
 
     /// <summary>
