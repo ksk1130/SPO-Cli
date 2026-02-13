@@ -47,6 +47,15 @@ internal sealed class SpoAuth
     /// </summary>
     public async Task<string> AcquireTokenAsync(string siteUrl, bool interactive)
     {
+        var result = await AcquireTokenResultAsync(siteUrl, interactive);
+        return result.AccessToken;
+    }
+
+    /// <summary>
+    /// トークン取得結果（ExpiresOn含む）を返す。
+    /// </summary>
+    public async Task<AuthenticationResult> AcquireTokenResultAsync(string siteUrl, bool interactive)
+    {
         var scopes = new[] { $"{UrlHelpers.GetTenantRoot(siteUrl)}/.default" };
         var accounts = await _app.GetAccountsAsync();
 
@@ -58,8 +67,7 @@ internal sealed class SpoAuth
                 throw new MsalUiRequiredException("no_account", "No cached account.");
             }
 
-            var result = await _app.AcquireTokenSilent(scopes, account).ExecuteAsync();
-            return result.AccessToken;
+            return await _app.AcquireTokenSilent(scopes, account).ExecuteAsync();
         }
         catch (MsalUiRequiredException)
         {
@@ -68,19 +76,28 @@ internal sealed class SpoAuth
                 throw;
             }
 
-            var result = await _app.AcquireTokenInteractive(scopes)
+            return await _app.AcquireTokenInteractive(scopes)
                 .WithPrompt(Prompt.SelectAccount)
                 .ExecuteAsync();
-            return result.AccessToken;
         }
     }
 
     /// <summary>
     /// Bearerトークン付きのCSOMコンテキストを生成する。
     /// </summary>
-    public async Task<ClientContext> CreateContextAsync(string siteUrl, bool interactive)
+    public async Task<ClientContext> CreateContextAsync(
+        string siteUrl,
+        bool interactive,
+        bool showExpiresOn = false,
+        AuthenticationResult? tokenResult = null)
     {
-        var token = await AcquireTokenAsync(siteUrl, interactive);
+        var result = tokenResult ?? await AcquireTokenResultAsync(siteUrl, interactive);
+        if (showExpiresOn)
+        {
+            DisplayExpiresOn(result);
+        }
+
+        var token = result.AccessToken;
         var context = new ClientContext(siteUrl);
         context.ExecutingWebRequest += (_, e) =>
         {
@@ -88,5 +105,11 @@ internal sealed class SpoAuth
         };
 
         return context;
+    }
+
+    private static void DisplayExpiresOn(AuthenticationResult result)
+    {
+        var local = result.ExpiresOn.LocalDateTime;
+        Console.WriteLine($"Access token ExpiresOn (local): {local:yyyy-MM-dd HH:mm:ss}");
     }
 }

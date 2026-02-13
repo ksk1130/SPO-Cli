@@ -24,7 +24,7 @@ internal sealed class SpoOperations
     public async Task ListAsync(string targetUrl)
     {
         var siteUrl = UrlHelpers.GetSiteUrl(targetUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false);
+        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true);
 
         var folderUrl = UrlHelpers.GetServerRelativeUrl(targetUrl);
         var folder = context.Web.GetFolderByServerRelativeUrl(folderUrl);
@@ -52,13 +52,18 @@ internal sealed class SpoOperations
     public async Task DownloadAsync(string fromUrl, string toPath)
     {
         var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false);
+        var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
+        using var context = await _auth.CreateContextAsync(
+            siteUrl,
+            interactive: false,
+            showExpiresOn: true,
+            tokenResult: tokenResult);
 
         var fileUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
         var file = context.Web.GetFileByServerRelativeUrl(fileUrl);
         context.Load(file, f => f.Length);
         context.ExecuteQuery();
-        var token = await _auth.AcquireTokenAsync(siteUrl, interactive: false);
+        var token = tokenResult.AccessToken;
         var encodedPath = Uri.EscapeDataString(fileUrl);
         var downloadUrl = $"{siteUrl}/_api/web/GetFileByServerRelativeUrl('{encodedPath}')/$value";
         using var client = new HttpClient();
@@ -91,7 +96,7 @@ internal sealed class SpoOperations
 
         var targetFileUrl = NormalizeTargetFileUrl(fromPath, toUrl);
         var siteUrl = UrlHelpers.GetSiteUrl(targetFileUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false);
+        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true);
 
         var serverRelative = UrlHelpers.GetServerRelativeUrl(targetFileUrl);
         var folderPath = serverRelative[..serverRelative.LastIndexOf('/')];
@@ -149,7 +154,7 @@ internal sealed class SpoOperations
     {
         var targetFileUrl = NormalizeTargetFileUrl(fromUrl, toUrl);
         var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false);
+        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true);
 
         var sourcePath = ResourcePath.FromDecodedUrl(UrlHelpers.GetServerRelativeUrl(fromUrl));
         var targetPath = ResourcePath.FromDecodedUrl(UrlHelpers.GetServerRelativeUrl(targetFileUrl));
