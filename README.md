@@ -61,3 +61,48 @@ dotnet run -- cp spo://a.txt .\a.txt
 ```
 dotnet run -- cp .\b.txt spo://フォルダB/b.txt
 ```
+
+## 使い方の詳細
+
+### ログインURLの正規化
+
+`login` コマンドで `--site` に指定するURLは、フォルダやファイルの完全パスでも自動的にサイトルートに正規化されます。
+
+以下のどの形式を指定しても、最終的には `https://contoso.sharepoint.com/sites/demo` がデフォルトルートとして保存されます：
+
+```
+# サイトルートで指定
+dotnet run -- login --site https://contoso.sharepoint.com/sites/demo
+
+# Shared Documents の階層で指定
+dotnet run -- login --site https://contoso.sharepoint.com/sites/demo/Shared%20Documents/フォルダA
+
+# ファイルのフルパスで指定
+dotnet run -- login --site https://contoso.sharepoint.com/sites/demo/Shared%20Documents/フォルダA/ファイル.txt
+```
+
+### spo:// による短縮表記
+
+`login` で保存されたデフォルトルートの **Shared Documents 配下** が、`spo://` のデフォルトになります。
+
+```
+# ログイン時のサイト: https://contoso.sharepoint.com/sites/demo
+
+# 以下のコマンドは
+dotnet run -- ls spo://フォルダA/フォルダB
+
+# 実際には以下と同等です
+dotnet run -- ls https://contoso.sharepoint.com/sites/demo/Shared%20Documents/フォルダA/フォルダB
+```
+
+### フォルダの一括ダウンロード
+
+`cp` コマンドで転送先に末尾の `/` をつけると、フォルダ配下のファイルを一括ダウンロード（またはアップロード）できます：
+
+```
+# Shared Documents/フォルダA 配下のすべてをダウンロード
+dotnet run -- cp spo://フォルダA/ .\ローカルフォルダ\
+
+# ローカルフォルダ配下のすべてをアップロード
+dotnet run -- cp .\ローカルフォルダ\ spo://フォルダA/
+```
