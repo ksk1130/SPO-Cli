@@ -98,16 +98,19 @@ static class Program
 			Directory.Delete(cacheDir, recursive: true);
 		}
 
+		// 入力されたURLをサイトルートに正規化（ファイルパスやフォルダパスを削除）
+		var normalizedSiteUrl = UrlHelpers.GetSiteUrl(siteUrl);
+
 		var config = SpoCliConfig.Load();
 		var auth = await SpoAuth.CreateAsync(config);
-		await auth.AcquireTokenResultAsync(siteUrl, interactive: true, prompt: Prompt.ForceLogin);
+		await auth.AcquireTokenResultAsync(normalizedSiteUrl, interactive: true, prompt: Prompt.ForceLogin);
 
 		var settings = SpoCliSettings.Load();
-		settings.DefaultRoot = siteUrl;
+		settings.DefaultRoot = normalizedSiteUrl;
 		settings.Save();
 
 		Console.WriteLine("Login succeeded.");
-		Console.WriteLine($"Default root: {siteUrl}");
+		Console.WriteLine($"Default root: {normalizedSiteUrl}");
 		return ExitSuccess;
 	}
 
