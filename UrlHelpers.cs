@@ -8,6 +8,7 @@ internal static class UrlHelpers
 {
 	/// <summary>
 	/// spo:// プレフィックスをデフォルトルートで展開する。
+	/// Shared Documents 配下がデフォルトになる。
 	/// </summary>
 	public static string ExpandSpoShorthand(string value)
 	{
@@ -25,10 +26,10 @@ internal static class UrlHelpers
 		var relative = value.Substring(6);
 		if (string.IsNullOrWhiteSpace(relative))
 		{
-			return settings.DefaultRoot;
+			return CombineUrl(settings.DefaultRoot, "Shared Documents");
 		}
 
-		return CombineUrl(settings.DefaultRoot, relative);
+		return CombineUrl(settings.DefaultRoot, "Shared Documents", relative);
 	}
 
 	/// <summary>
@@ -109,6 +110,15 @@ internal static class UrlHelpers
         }
 
         return baseUrl + relative;
+    }
+
+    /// <summary>
+    /// ベースURLと複数の相対セグメントを結合する。
+    /// </summary>
+    public static string CombineUrl(string baseUrl, string segment1, string segment2)
+    {
+        var combined = CombineUrl(baseUrl, segment1);
+        return CombineUrl(combined, segment2);
     }
 
     private static Uri ParseUri(string value)
