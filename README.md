@@ -6,7 +6,7 @@ SharePoint Online のファイル操作をCLIで(aws s3コマンド風に)実行
 
 - `login [--mfa]`
 - `ls <site-or-folder-url>`
-- `cp <from> <to>`
+- `cp [--recursive] <from> <to>`
 
 CSOMの対話ログインとMSALトークンキャッシュを使います。
 
@@ -106,3 +106,26 @@ dotnet run -- cp spo://フォルダA/ .\ローカルフォルダ\
 # ローカルフォルダ配下のすべてをアップロード
 dotnet run -- cp .\ローカルフォルダ\ spo://フォルダA/
 ```
+
+### 再帰ダウンロード（3階層まで）
+
+`--recursive` フラグを指定すると、フォルダを最大3階層まで再帰的にダウンロードできます：
+
+```
+# Shared Documents/root 配下を最大3階層までダウンロード
+# root/a.txt (1階層)
+# root/dirB/b.txt (2階層)
+# root/dirB/dirC/c.txt (3階層) ✅ ここまで
+# root/dirB/dirC/dirD/d.txt (4階層) ❌ スキップ
+dotnet run -- cp --recursive spo://root/ .\ローカルフォルダ\
+```
+
+フラグの位置は柔軟に対応しています：
+- `cp --recursive spo://folder/ .\local\`
+- `cp spo://folder/ .\local\ --recursive`
+
+#### 注意事項
+
+- **`--recursive` はダウンロード時のみ対応** - アップロード時に `--recursive` を指定しても無視されます
+- **ダウンロード時にフォルダは自動作成** - ローカル側の対象ディレクトリが存在しない場合、自動的に作成されます
+- **フォルダ指定時は末尾の `/` が必須** - ローカル側が入出力の向きを判定するため、必ず末尾に `/` をつけてください

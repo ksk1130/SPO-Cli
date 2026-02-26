@@ -50,11 +50,18 @@ internal sealed class SpoOperations
     /// <summary>
     /// SPOからローカルへファイルをダウンロードする。
     /// </summary>
-    public async Task DownloadAsync(string fromUrl, string toPath)
+    public async Task DownloadAsync(string fromUrl, string toPath, bool recursive = false)
     {
         if (fromUrl.EndsWith("/", StringComparison.Ordinal))
         {
-            await DownloadFolderFilesAsync(fromUrl, toPath);
+            if (recursive)
+            {
+                await DownloadFolderRecursiveAsync(fromUrl, toPath);
+            }
+            else
+            {
+                await DownloadFolderFilesAsync(fromUrl, toPath);
+            }
             return;
         }
 
@@ -125,6 +132,66 @@ internal sealed class SpoOperations
                 file.Length,
                 file.Name,
                 tokenResult);
+        }
+    }
+
+    /// <summary>
+    /// フォルダを最大5階層まで再帰的にダウンロードします。
+    /// </summary>
+    private async Task DownloadFolderRecursiveAsync(string folderUrl, string toPath, int maxDepth = 3, int currentDepth = 0)
+    {
+        if (!Directory.Exists(toPath)
+            && !toPath.EndsWith(Path.DirectorySeparatorChar)
+            && !toPath.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            throw new InvalidOperationException("Folder download requires a local directory path.");
+        }
+
+        Directory.CreateDirectory(toPath);
+
+        // 終了条件: 最大深さを超過した場合は処理をのぞく
+        if (currentDepth > maxDepth)
+        {
+            return;
+        }
+
+        var siteUrl = UrlHelpers.GetSiteUrl(folderUrl);
+        var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
+        using var context = await _auth.CreateContextAsync(
+            siteUrl,
+            interactive: false,
+            showExpiresOn: true,
+            tokenResult: tokenResult);
+
+        var serverRelativeFolder = UrlHelpers.GetServerRelativeUrl(folderUrl);
+        var folder = context.Web.GetFolderByServerRelativeUrl(serverRelativeFolder);
+        context.Load(folder, f => f.Name);
+        context.Load(folder.Files, files => files.Include(f => f.Name, f => f.Length, f => f.ServerRelativeUrl));
+        context.Load(folder.Folders, folders => folders.Include(f => f.Name, f => f.ServerRelativeUrl));
+        context.ExecuteQuery();
+
+        // 直下のすべてのファイルをダウンロード
+        foreach (var file in folder.Files)
+        {
+            var localPath = Path.Combine(toPath, file.Name);
+            await DownloadFileByServerRelativeUrlAsync(
+                siteUrl,
+                file.ServerRelativeUrl,
+                localPath,
+                file.Length,
+                file.Name,
+                tokenResult);
+        }
+
+        // 深さに余裕があればサブフォルダを再帰処理
+        if (currentDepth < maxDepth)
+        {
+            foreach (var subFolder in folder.Folders)
+            {
+                var subFolderUrl = siteUrl + subFolder.ServerRelativeUrl + "/";
+                var subLocalPath = Path.Combine(toPath, subFolder.Name);
+                await DownloadFolderRecursiveAsync(subFolderUrl, subLocalPath, maxDepth, currentDepth + 1);
+            }
         }
     }
 

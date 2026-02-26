@@ -144,14 +144,30 @@ static class Program
 	/// </summary>
 	private static async Task<int> HandleCopyAsync(string[] args)
 	{
-		if (args.Length != 2)
+		bool recursive = false;
+		var argList = new System.Collections.Generic.List<string>();
+
+		// --recursive フラグを解析
+		foreach (var arg in args)
 		{
-			Console.Error.WriteLine("Usage: spo-cli cp <from> <to>");
+			if (arg.Equals("--recursive", StringComparison.OrdinalIgnoreCase))
+			{
+				recursive = true;
+			}
+			else
+			{
+				argList.Add(arg);
+			}
+		}
+
+		if (argList.Count != 2)
+		{
+			Console.Error.WriteLine("Usage: spo-cli cp [--recursive] <from> <to>");
 			return ExitUsageError;
 		}
 
-		var from = UrlHelpers.ExpandSpoShorthand(args[0]);
-		var to = UrlHelpers.ExpandSpoShorthand(args[1]);
+		var from = UrlHelpers.ExpandSpoShorthand(argList[0]);
+		var to = UrlHelpers.ExpandSpoShorthand(argList[1]);
 		var fromIsSpo = UrlHelpers.IsSpoUrl(from);
 		var toIsSpo = UrlHelpers.IsSpoUrl(to);
 
@@ -167,7 +183,7 @@ static class Program
 
 		if (fromIsSpo && !toIsSpo)
 		{
-			await ops.DownloadAsync(from, to);
+			await ops.DownloadAsync(from, to, recursive);
 			return ExitSuccess;
 		}
 
@@ -211,7 +227,7 @@ static class Program
 		Console.WriteLine("Commands:");
 		Console.WriteLine("  login --site <site-url>        Login and cache token");
 		Console.WriteLine("  ls <site-or-folder-url>        List files/folders");
-		Console.WriteLine("  cp <from> <to>                 Copy file (SPO <-> local or SPO <-> SPO)");
+		Console.WriteLine("  cp [--recursive] <from> <to>   Copy file (SPO <-> local or SPO <-> SPO)");
 		Console.WriteLine();
 		Console.WriteLine("Env:");
 		Console.WriteLine("  SPO_CLIENT_ID                  Entra ID app client ID");
