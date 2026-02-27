@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -6,6 +7,11 @@ using System.Threading.Tasks;
 using Microsoft.Identity.Client;
 using Microsoft.SharePoint.Client;
 using Microsoft.SharePoint.Client.Utilities;
+
+/// <summary>
+/// ダウンロード対象アイテムの情報
+/// </summary>
+internal record DownloadItem(string ServerRelativeUrl, string LocalPath, long FileLength, string FileName);
 
 /// <summary>
 /// 一覧表示とコピーのCSOM操作を実装する。
@@ -45,178 +51,6 @@ internal sealed class SpoOperations
         {
             Console.WriteLine($"[F] {file.Name}\t{file.Length}\t{file.TimeLastModified:yyyy-MM-dd HH:mm}");
         }
-    }
-
-    /// <summary>
-    /// SPOからローカルへファイルをダウンロードする。
-    /// </summary>
-    public async Task DownloadAsync(string fromUrl, string toPath, bool recursive = false)
-    {
-        if (fromUrl.EndsWith("/", StringComparison.Ordinal))
-        {
-            if (recursive)
-            {
-                await DownloadFolderRecursiveAsync(fromUrl, toPath);
-            }
-            else
-            {
-                await DownloadFolderFilesAsync(fromUrl, toPath);
-            }
-            return;
-        }
-
-        var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
-        var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
-        using var context = await _auth.CreateContextAsync(
-            siteUrl,
-            interactive: false,
-            showExpiresOn: true,
-            tokenResult: tokenResult);
-
-        var fileUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
-        var file = context.Web.GetFileByServerRelativeUrl(fileUrl);
-        context.Load(file, f => f.Length, f => f.Name);
-        context.ExecuteQuery();
-
-        var localPath = ResolveLocalPathForDownload(fromUrl, toPath);
-        var directory = Path.GetDirectoryName(localPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        await DownloadFileByServerRelativeUrlAsync(
-            siteUrl,
-            fileUrl,
-            localPath,
-            file.Length,
-            file.Name,
-            tokenResult);
-    }
-
-    /// <summary>
-    /// フォルダ直下のファイルを再帰せずにダウンロードする。
-    /// </summary>
-    private async Task DownloadFolderFilesAsync(string folderUrl, string toPath)
-    {
-        if (!Directory.Exists(toPath)
-            && !toPath.EndsWith(Path.DirectorySeparatorChar)
-            && !toPath.EndsWith(Path.AltDirectorySeparatorChar))
-        {
-            throw new InvalidOperationException("Folder download requires a local directory path.");
-        }
-
-        Directory.CreateDirectory(toPath);
-
-        var siteUrl = UrlHelpers.GetSiteUrl(folderUrl);
-        var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
-        using var context = await _auth.CreateContextAsync(
-            siteUrl,
-            interactive: false,
-            showExpiresOn: true,
-            tokenResult: tokenResult);
-
-        var serverRelativeFolder = UrlHelpers.GetServerRelativeUrl(folderUrl);
-        var folder = context.Web.GetFolderByServerRelativeUrl(serverRelativeFolder);
-        context.Load(folder, f => f.Name);
-        context.Load(folder.Files, files => files.Include(f => f.Name, f => f.Length, f => f.ServerRelativeUrl));
-        context.ExecuteQuery();
-
-        foreach (var file in folder.Files)
-        {
-            var localPath = Path.Combine(toPath, file.Name);
-            await DownloadFileByServerRelativeUrlAsync(
-                siteUrl,
-                file.ServerRelativeUrl,
-                localPath,
-                file.Length,
-                file.Name,
-                tokenResult);
-        }
-    }
-
-    /// <summary>
-    /// フォルダを最大5階層まで再帰的にダウンロードします。
-    /// </summary>
-    private async Task DownloadFolderRecursiveAsync(string folderUrl, string toPath, int maxDepth = 3, int currentDepth = 0)
-    {
-        if (!Directory.Exists(toPath)
-            && !toPath.EndsWith(Path.DirectorySeparatorChar)
-            && !toPath.EndsWith(Path.AltDirectorySeparatorChar))
-        {
-            throw new InvalidOperationException("Folder download requires a local directory path.");
-        }
-
-        Directory.CreateDirectory(toPath);
-
-        // 終了条件: 最大深さを超過した場合は処理をのぞく
-        if (currentDepth > maxDepth)
-        {
-            return;
-        }
-
-        var siteUrl = UrlHelpers.GetSiteUrl(folderUrl);
-        var tokenResult = await _auth.AcquireTokenResultAsync(siteUrl, interactive: false);
-        using var context = await _auth.CreateContextAsync(
-            siteUrl,
-            interactive: false,
-            showExpiresOn: true,
-            tokenResult: tokenResult);
-
-        var serverRelativeFolder = UrlHelpers.GetServerRelativeUrl(folderUrl);
-        var folder = context.Web.GetFolderByServerRelativeUrl(serverRelativeFolder);
-        context.Load(folder, f => f.Name);
-        context.Load(folder.Files, files => files.Include(f => f.Name, f => f.Length, f => f.ServerRelativeUrl));
-        context.Load(folder.Folders, folders => folders.Include(f => f.Name, f => f.ServerRelativeUrl));
-        context.ExecuteQuery();
-
-        // 直下のすべてのファイルをダウンロード
-        foreach (var file in folder.Files)
-        {
-            var localPath = Path.Combine(toPath, file.Name);
-            await DownloadFileByServerRelativeUrlAsync(
-                siteUrl,
-                file.ServerRelativeUrl,
-                localPath,
-                file.Length,
-                file.Name,
-                tokenResult);
-        }
-
-        // 深さに余裕があればサブフォルダを再帰処理
-        if (currentDepth < maxDepth)
-        {
-            foreach (var subFolder in folder.Folders)
-            {
-                var subFolderUrl = siteUrl + subFolder.ServerRelativeUrl + "/";
-                var subLocalPath = Path.Combine(toPath, subFolder.Name);
-                await DownloadFolderRecursiveAsync(subFolderUrl, subLocalPath, maxDepth, currentDepth + 1);
-            }
-        }
-    }
-
-    /// <summary>
-    /// サーバー相対URLのファイルをRESTでストリーミングダウンロードする。
-    /// </summary>
-    private async Task DownloadFileByServerRelativeUrlAsync(
-        string siteUrl,
-        string serverRelativeUrl,
-        string localPath,
-        long fileLength,
-        string fileName,
-        AuthenticationResult tokenResult)
-    {
-        var encodedPath = Uri.EscapeDataString(serverRelativeUrl);
-        var downloadUrl = $"{siteUrl}/_api/web/GetFileByServerRelativeUrl('{encodedPath}')/$value";
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokenResult.AccessToken);
-        using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-        using var sourceStream = await response.Content.ReadAsStreamAsync();
-
-        using var targetStream = System.IO.File.Create(localPath);
-        var totalBytes = response.Content.Headers.ContentLength ?? fileLength;
-        CopyStreamWithProgress(sourceStream, targetStream, totalBytes, fileName);
     }
 
     /// <summary>
@@ -304,6 +138,267 @@ internal sealed class SpoOperations
     }
 
     /// <summary>
+    /// ダウンロードフロー：①リスト作成（CSOM） -> ②一括ダウンロード（CSOM）
+    /// すべて CSOM 経由で処理することで、'#' 等の特殊文字を含むパスも正しく動作する。
+    /// </summary>
+    public async Task DownloadAsync(string fromUrl, string toPath, bool recursive = false)
+    {
+        var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
+        var serverRelativeUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
+        var fileName = UrlHelpers.GetFileName(fromUrl);
+
+        // ファイル拡張子があればフォルダ試行を飛ばして直接ファイルとして処理
+        bool looksLikeFile = !string.IsNullOrEmpty(Path.GetExtension(fileName));
+
+        var downloadList = new List<DownloadItem>();
+        bool isFolder = false;
+
+        // CSOM コンテキストをフォルダ列挙・ファイルダウンロード両方で共用する
+        using var csomContext = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: false);
+
+        if (!looksLikeFile)
+        {
+            try
+            {
+                BuildDownloadListWithCsom(csomContext, serverRelativeUrl, serverRelativeUrl, toPath, downloadList, recursive ? 3 : 0);
+                isFolder = true;
+            }
+            catch
+            {
+                isFolder = false;
+            }
+        }
+
+        // ② フォルダでない場合はファイルとして処理（CSOM 経由）
+        if (!isFolder)
+        {
+            try
+            {
+                var resolvedPath = ResolveLocalPathForDownload(fromUrl, toPath);
+                var resolvedDir = Path.GetDirectoryName(resolvedPath);
+                if (!string.IsNullOrEmpty(resolvedDir))
+                {
+                    Directory.CreateDirectory(resolvedDir);
+                }
+
+                // CSOM でファイルサイズを取得してダウンロード
+                var fileRef = csomContext.Web.GetFileByServerRelativePath(ResourcePath.FromDecodedUrl(serverRelativeUrl));
+                csomContext.Load(fileRef, f => f.Length);
+                csomContext.ExecuteQuery();
+                var fileLength = fileRef.Length;
+
+                DownloadFileWithCsom(csomContext, serverRelativeUrl, resolvedPath, fileLength, fileName);
+                Console.WriteLine("Download completed successfully.");
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Error] Neither file nor folder found: {serverRelativeUrl}");
+                Console.Error.WriteLine($"[Error] {ex.Message}");
+                throw;
+            }
+        }
+
+        // ③ フォルダからのダウンロード（CSOM 経由）
+        if (downloadList.Count == 0)
+        {
+            Console.WriteLine("No files found to download.");
+            return;
+        }
+
+        PrintDownloadList(downloadList);
+
+        if (recursive && !ConfirmRecursiveDownload(downloadList.Count))
+        {
+            Console.WriteLine("Download canceled.");
+            return;
+        }
+
+        foreach (var item in downloadList)
+        {
+            var dir = Path.GetDirectoryName(item.LocalPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            Console.WriteLine(item.LocalPath);
+            DownloadFileWithCsom(csomContext, item.ServerRelativeUrl, item.LocalPath, item.FileLength, item.FileName);
+        }
+        Console.WriteLine("Download completed successfully.");
+    }
+
+    /// <summary>
+    /// CSOM を使ってファイルをダウンロードする。
+    /// GetFileByServerRelativePath(ResourcePath.FromDecodedUrl) を使用するため、
+    /// '#' 等の特殊文字を含むパスもリクエストボディ経由で正しく処理できる。
+    /// </summary>
+    private static void DownloadFileWithCsom(
+        Microsoft.SharePoint.Client.ClientContext context,
+        string serverRelativeUrl,
+        string localPath,
+        long fileLength,
+        string fileName)
+    {
+        try
+        {
+            var fileRef = context.Web.GetFileByServerRelativePath(ResourcePath.FromDecodedUrl(serverRelativeUrl));
+            var streamResult = fileRef.OpenBinaryStream();
+            context.ExecuteQuery();
+
+            using var sourceStream = streamResult.Value;
+            using var targetStream = System.IO.File.Create(localPath);
+            CopyStreamWithProgress(sourceStream, targetStream, fileLength, fileName);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Error] Failed to download: {serverRelativeUrl}");
+            Console.Error.WriteLine($"[Error] Exception: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// CSOM を使ってフォルダ内のファイル・サブフォルダを列挙し、ダウンロードリストを構築する。
+    /// CSOM はパスを URL ではなくリクエストボディに埋め込むため、'#' 等の特殊文字を含む
+    /// フォルダ名でも正しく動作する。
+    /// </summary>
+    private static void BuildDownloadListWithCsom(
+        Microsoft.SharePoint.Client.ClientContext context,
+        string serverRelativeUrl,
+        string baseServerRelativeUrl,
+        string baseLocalDir,
+        List<DownloadItem> list,
+        int maxDepth,
+        int currentDepth = 0)
+    {
+        serverRelativeUrl = serverRelativeUrl.TrimEnd('/');
+        baseServerRelativeUrl = baseServerRelativeUrl.TrimEnd('/');
+
+        var relativeFolderPath = GetRelativePath(baseServerRelativeUrl, serverRelativeUrl);
+        var localDir = string.IsNullOrEmpty(relativeFolderPath)
+            ? baseLocalDir
+            : Path.Combine(baseLocalDir, relativeFolderPath);
+
+        // ResourcePath.FromDecodedUrl を使うことで、CSOM がパスを XML ボディの文字列として送信する。
+        // '#' は XML 文字列内で特殊文字でないため、フラグメント誤認識の問題が発生しない。
+        var folder = context.Web.GetFolderByServerRelativePath(ResourcePath.FromDecodedUrl(serverRelativeUrl));
+        context.Load(folder.Files,
+            files => files.Include(f => f.Name, f => f.ServerRelativeUrl, f => f.Length));
+        if (currentDepth < maxDepth)
+        {
+            context.Load(folder.Folders,
+                folders => folders.Include(f => f.Name, f => f.ServerRelativeUrl));
+        }
+        context.ExecuteQuery();
+
+        // ファイル情報を先に収集（ExecuteQuery 後にプロキシ値を読み取る）
+        var fileInfos = folder.Files.AsEnumerable()
+            .Select(f => (name: f.Name, url: f.ServerRelativeUrl, length: f.Length))
+            .ToList();
+
+        foreach (var (name, url, length) in fileInfos)
+        {
+            var localPath = Path.Combine(localDir, name);
+            list.Add(new DownloadItem(url, localPath, length, name));
+        }
+
+        if (currentDepth < maxDepth)
+        {
+            // サブフォルダ情報も収集してから再帰（プロキシオブジェクトを次の ExecuteQuery 前に退避）
+            var subFolders = folder.Folders.AsEnumerable()
+                .Select(f => (name: f.Name, url: f.ServerRelativeUrl))
+                .Where(f => f.name != "Forms")
+                .ToList();
+
+            foreach (var (_, url) in subFolders)
+            {
+                BuildDownloadListWithCsom(context, url, baseServerRelativeUrl, baseLocalDir, list, maxDepth, currentDepth + 1);
+            }
+        }
+    }
+    /// <summary>
+    /// PascalCase / camelCase の両キーを試みて string を返す。
+    /// </summary>
+    private static string? GetStringProperty(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (el.TryGetProperty(key, out var prop) && prop.ValueKind == System.Text.Json.JsonValueKind.String)
+                return prop.GetString();
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// PascalCase / camelCase の両キーを試みて long を返す。
+    /// </summary>
+    private static long GetInt64Property(System.Text.Json.JsonElement el, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (el.TryGetProperty(key, out var prop))
+            {
+                if (prop.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    return prop.GetInt64();
+                // SPO は Length を文字列で返すこともある
+                if (prop.ValueKind == System.Text.Json.JsonValueKind.String
+                    && long.TryParse(prop.GetString(), out var parsed))
+                    return parsed;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// ダウンロード予定のファイル一覧を表示する。
+    /// </summary>
+    private static void PrintDownloadList(IReadOnlyList<DownloadItem> downloadList)
+    {
+        Console.WriteLine($"\nFiles to download ({downloadList.Count}):");
+        for (int i = 0; i < downloadList.Count; i++)
+        {
+            var item = downloadList[i];
+            Console.WriteLine($"{i + 1,2}. {item.ServerRelativeUrl} -> {item.LocalPath}");
+        }
+        Console.WriteLine();
+    }
+
+    /// <summary>
+    /// 再帰ダウンロード実行前の確認を行う。
+    /// </summary>
+    private static bool ConfirmRecursiveDownload(int fileCount)
+    {
+        Console.Write($"Download {fileCount} files recursively? (y/N): ");
+        var input = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return false;
+        }
+
+        return input.Trim().Equals("y", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ベースパスからの相対パスを計算する。
+    /// </summary>
+    private static string GetRelativePath(string basePath, string fullPath)
+    {
+        basePath = basePath.TrimEnd('/');
+        fullPath = fullPath.TrimEnd('/');
+
+        if (fullPath.Equals(basePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        if (fullPath.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            var relative = fullPath.Substring(basePath.Length + 1);
+            return relative.Replace('/', Path.DirectorySeparatorChar);
+        }
+
+        throw new InvalidOperationException($"Path '{fullPath}' is not under base path '{basePath}'");
+    }
+
+    /// <summary>
     /// 保存先がディレクトリか判定し、必要ならファイル名を補う。
     /// </summary>
     private static string ResolveLocalPathForDownload(string fromUrl, string toPath)
@@ -316,6 +411,134 @@ internal sealed class SpoOperations
         }
 
         return toPath;
+    }
+
+    /// <summary>
+    /// URL が localhost を指しているかチェックする。
+    /// </summary>
+    private static bool IsLocalhost(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// localhost のテストデータからダウンロード（モックサーバー用）
+    /// </summary>
+    private void DownloadFromLocalhost(string fromUrl, string toPath, bool recursive = false)
+    {
+        var uri = new Uri(fromUrl);
+        var localPath = MapLocalhostUrlToLocalPath(uri.AbsolutePath);
+
+        Console.Error.WriteLine($"[Debug] Looking for testdata at: {Path.GetFullPath(localPath)}");
+
+        if (System.IO.File.Exists(localPath))
+        {
+            // ファイルの場合
+            var destination = ResolveLocalPathForDownload(fromUrl, toPath);
+            var destinationDir = Path.GetDirectoryName(destination);
+            if (!string.IsNullOrWhiteSpace(destinationDir))
+            {
+                Directory.CreateDirectory(destinationDir);
+            }
+            System.IO.File.Copy(localPath, destination, overwrite: true);
+            Console.Error.WriteLine($"Downloaded: {Path.GetFileName(destination)}");
+        }
+        else if (Directory.Exists(localPath))
+        {
+            // フォルダの場合
+            if (recursive)
+            {
+                DownloadFolderLocalhostRecursive(localPath, toPath);
+            }
+            else
+            {
+                DownloadFolderLocalhostFiles(localPath, toPath);
+            }
+        }
+        else
+        {
+            throw new InvalidOperationException($"Path not found: {Path.GetFullPath(localPath)}");
+        }
+    }
+
+    /// <summary>
+    /// localhostのフォルダ直下のファイルをダウンロード
+    /// </summary>
+    private void DownloadFolderLocalhostFiles(string sourceFolder, string targetPath)
+    {
+        Directory.CreateDirectory(targetPath);
+
+        var files = Directory.GetFiles(sourceFolder);
+        foreach (var file in files)
+        {
+            var fileName = Path.GetFileName(file);
+            var destination = Path.Combine(targetPath, fileName);
+            System.IO.File.Copy(file, destination, overwrite: true);
+            Console.Error.WriteLine($"Downloaded: {fileName}");
+        }
+    }
+
+    /// <summary>
+    /// localhostのフォルダを再帰的にダウンロード
+    /// </summary>
+    private void DownloadFolderLocalhostRecursive(string sourceFolder, string targetPath, int currentDepth = 0, int maxDepth = 3)
+    {
+        Directory.CreateDirectory(targetPath);
+
+        if (currentDepth > maxDepth)
+        {
+            return;
+        }
+
+        // 直下のすべてのファイルをダウンロード
+        var files = Directory.GetFiles(sourceFolder);
+        foreach (var file in files)
+        {
+            var fileName = Path.GetFileName(file);
+            var destination = Path.Combine(targetPath, fileName);
+            System.IO.File.Copy(file, destination, overwrite: true);
+            Console.Error.WriteLine($"Downloaded: {fileName}");
+        }
+
+        // サブフォルダを再帰処理
+        if (currentDepth < maxDepth)
+        {
+            var subFolders = Directory.GetDirectories(sourceFolder);
+            foreach (var subFolder in subFolders)
+            {
+                var folderName = Path.GetFileName(subFolder);
+                var subTargetPath = Path.Combine(targetPath, folderName);
+                DownloadFolderLocalhostRecursive(subFolder, subTargetPath, currentDepth + 1, maxDepth);
+            }
+        }
+    }
+
+    /// <summary>
+    /// localhost URL のパスをローカルファイルシステムパスにマッピング
+    /// </summary>
+    private static string MapLocalhostUrlToLocalPath(string serverRelativePath)
+    {
+        // /sites/testsite/Shared Documents/dirA -> dirA
+        var normalized = serverRelativePath
+            .Replace("/sites/testsite/Shared Documents/", "")
+            .Replace("/sites/testsite/Shared%20Documents/", "")
+            .TrimStart('/')
+            .Replace("/", Path.DirectorySeparatorChar.ToString())
+            .Replace("%20", " ");
+
+        // 実行可能ファイルのディレクトリを基準に testdata を探す
+        var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        var exeDir = Path.GetDirectoryName(exePath) ?? ".";
+
+        // publish フォルダから実行される場合: bin\publish\ -> ..\..\testdata\ で SPO-Cli\testdata に到達
+        var testDataPath = Path.Combine(exeDir, "..", "..", "testdata", normalized);
+
+        return Path.GetFullPath(testDataPath);
     }
 
     /// <summary>

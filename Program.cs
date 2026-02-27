@@ -23,8 +23,29 @@ static class Program
 			return ExitSuccess;
 		}
 
-		var command = args[0].ToLowerInvariant();
-		var rest = args.Length > 1 ? args[1..] : Array.Empty<string>();
+		// グローバルオプションを先に解析
+		bool recursiveFlag = false;
+		var newArgs = new System.Collections.Generic.List<string>();
+		foreach (var arg in args)
+		{
+			if (arg.Equals("--recursive", StringComparison.OrdinalIgnoreCase))
+			{
+				recursiveFlag = true;
+			}
+			else
+			{
+				newArgs.Add(arg);
+			}
+		}
+
+		if (newArgs.Count == 0)
+		{
+			PrintHelp();
+			return ExitSuccess;
+		}
+
+		var command = newArgs[0].ToLowerInvariant();
+		var rest = newArgs.Count > 1 ? newArgs.Skip(1).ToArray() : Array.Empty<string>();
 
 		try
 		{
@@ -32,7 +53,7 @@ static class Program
 			{
 				"login" => await HandleLoginAsync(rest),
 				"ls" => await HandleListAsync(rest),
-				"cp" => await HandleCopyAsync(rest),
+				"cp" => await HandleCopyAsync(rest, recursiveFlag),
 				_ => HandleUnknown(command)
 			};
 		}
@@ -142,12 +163,12 @@ static class Program
 	/// <summary>
 	/// URL判定によりSPOとローカル間のコピーを実行する。
 	/// </summary>
-	private static async Task<int> HandleCopyAsync(string[] args)
+	private static async Task<int> HandleCopyAsync(string[] args, bool recursiveFlag = false)
 	{
-		bool recursive = false;
+		bool recursive = recursiveFlag;
 		var argList = new System.Collections.Generic.List<string>();
 
-		// --recursive フラグを解析
+		// cp コマンド内での --recursive フラグも解析（後方互換性のため）
 		foreach (var arg in args)
 		{
 			if (arg.Equals("--recursive", StringComparison.OrdinalIgnoreCase))
@@ -162,7 +183,7 @@ static class Program
 
 		if (argList.Count != 2)
 		{
-			Console.Error.WriteLine("Usage: spo-cli cp [--recursive] <from> <to>");
+			Console.Error.WriteLine("Usage: spo-cli [--recursive] cp <from> <to>");
 			return ExitUsageError;
 		}
 
@@ -224,10 +245,13 @@ static class Program
 	{
 		Console.WriteLine("spo-cli - SharePoint Online CLI (CSOM)");
 		Console.WriteLine();
+		Console.WriteLine("Global Options:");
+		Console.WriteLine("  --recursive                    Enable recursive folder download");
+		Console.WriteLine();
 		Console.WriteLine("Commands:");
 		Console.WriteLine("  login --site <site-url>        Login and cache token");
 		Console.WriteLine("  ls <site-or-folder-url>        List files/folders");
-		Console.WriteLine("  cp [--recursive] <from> <to>   Copy file (SPO <-> local or SPO <-> SPO)");
+		Console.WriteLine("  cp <from> <to>                 Copy file (SPO <-> local or SPO <-> SPO)");
 		Console.WriteLine();
 		Console.WriteLine("Env:");
 		Console.WriteLine("  SPO_CLIENT_ID                  Entra ID app client ID");
@@ -238,5 +262,6 @@ static class Program
 		Console.WriteLine("  spo-cli login --site https://contoso.sharepoint.com");
 		Console.WriteLine("  spo-cli ls https://contoso.sharepoint.com/sites/demo/Shared%20Documents");
 		Console.WriteLine("  spo-cli cp https://contoso.sharepoint.com/sites/demo/Shared%20Documents/a.txt .\\a.txt");
+		Console.WriteLine("  spo-cli --recursive cp https://contoso.sharepoint.com/sites/demo/Shared%20Documents/folder/ .\\local\\");
 	}
 }

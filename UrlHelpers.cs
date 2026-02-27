@@ -18,28 +18,41 @@ internal static class UrlHelpers
 		}
 
 		var settings = SpoCliSettings.Load();
+		//Console.Error.WriteLine($"[Debug] SpoCliSettings.Load() -> DefaultRoot={settings.DefaultRoot}");
+		
 		if (string.IsNullOrWhiteSpace(settings.DefaultRoot))
 		{
 			throw new InvalidOperationException("spo:// を使うには先に login でサイトを指定してください。");
 		}
 
 		var relative = value.Substring(6);
+		//Console.Error.WriteLine($"[Debug] ExpandSpoShorthand: input={value}, DefaultRoot={settings.DefaultRoot}, relative={relative}");
+		
+		string result;
 		if (string.IsNullOrWhiteSpace(relative))
 		{
-			return CombineUrl(settings.DefaultRoot, "Shared Documents");
+			result = CombineUrl(settings.DefaultRoot, "Shared Documents");
 		}
-
-		return CombineUrl(settings.DefaultRoot, "Shared Documents", relative);
+		else
+		{
+			result = CombineUrl(settings.DefaultRoot, "Shared Documents", relative);
+		}
+		
+		//Console.Error.WriteLine($"[Debug] ExpandSpoShorthand: result={result}");
+		return result;
 	}
 
 	/// <summary>
 	/// SharePoint Online URLかどうかを判定する。
+	/// localhostも対応（モックサーバー用）
 	/// </summary>
 	public static bool IsSpoUrl(string value)
 	{
 		return TryParseUri(value, out var uri)
 			&& (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
-			&& uri.Host.Contains("sharepoint.com", StringComparison.OrdinalIgnoreCase);
+			&& (uri.Host.Contains("sharepoint.com", StringComparison.OrdinalIgnoreCase)
+				|| uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+				|| uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase));
 	}
 
     /// <summary>
@@ -48,7 +61,7 @@ internal static class UrlHelpers
     public static string GetTenantRoot(string url)
     {
         var uri = ParseUri(url);
-        return $"{uri.Scheme}://{uri.Host}";
+        return $"{uri.Scheme}://{uri.Authority}";
     }
 
     /// <summary>
@@ -57,7 +70,9 @@ internal static class UrlHelpers
     public static string GetServerRelativeUrl(string url)
     {
         var uri = ParseUri(url);
-        return Uri.UnescapeDataString(uri.AbsolutePath);
+        var result = Uri.UnescapeDataString(uri.AbsolutePath);
+        //Console.Error.WriteLine($"[Debug] GetServerRelativeUrl: url={url} -> AbsolutePath={uri.AbsolutePath} -> result={result}");
+        return result;
     }
 
     /// <summary>
@@ -76,7 +91,9 @@ internal static class UrlHelpers
             sitePath = $"/{segments[0]}/{segments[1]}";
         }
 
-        return $"{uri.Scheme}://{uri.Host}{sitePath}";
+        var result = $"{uri.Scheme}://{uri.Authority}{sitePath}";
+        //Console.Error.WriteLine($"[Debug] GetSiteUrl: url={url} -> segments={string.Join(",", segments)} -> result={result}");
+        return result;
     }
 
     /// <summary>
@@ -133,12 +150,16 @@ internal static class UrlHelpers
 
     private static bool TryParseUri(string value, out Uri uri)
     {
-        if (Uri.TryCreate(value, UriKind.Absolute, out uri))
+        // '#' は URI のフラグメント区切り文字。パス内のフォルダ／ファイル名に '#' が含まれる場合、
+        // Uri.TryCreate に渡す前に %23 に置換しないと '#' 以降がパスから切り捨てられる。
+        // SPO の URL にフラグメントが使われることはないため、全ての '#' を安全に %23 へ変換する。
+        var sanitized = value.Replace("#", "%23");
+        if (Uri.TryCreate(sanitized, UriKind.Absolute, out uri))
         {
             return true;
         }
 
-        var escaped = Uri.EscapeUriString(value);
+        var escaped = Uri.EscapeUriString(sanitized);
         return Uri.TryCreate(escaped, UriKind.Absolute, out uri);
     }
 }

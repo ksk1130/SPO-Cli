@@ -1,12 +1,11 @@
 @echo off
-REM x64用のシングル実行可能ファイル（EXE）をビルド
+REM x64用のシングル実行可能ファイル(EXE)をビルド
 REM .NET Runtimeなしで動作する自給自足型EXE
 
 setlocal enabledelayexpansion
 
 echo Building x64 self-contained EXE...
-dotnet publish -c Release -r win-x64 --self-contained=true -p:PublishSingleFile=true --output ./bin/publish
-
+dotnet publish SpoCli.csproj -c Release -r win-x64 --self-contained=true -p:PublishSingleFile=true --output ./bin/publish
 if %ERRORLEVEL% equ 0 (
 	echo.
 	echo ビルド完了。
