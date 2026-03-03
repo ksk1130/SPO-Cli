@@ -47,6 +47,12 @@ internal sealed class SpoAuth
     /// </summary>
     public async Task<string> AcquireTokenAsync(string siteUrl, bool interactive)
     {
+        // localhost の場合は認証をスキップ（モックサーバー用）
+        if (IsLocalhost(siteUrl))
+        {
+            return "mock-token-for-localhost";
+        }
+
         var result = await AcquireTokenResultAsync(siteUrl, interactive);
         return result.AccessToken;
     }
@@ -59,6 +65,15 @@ internal sealed class SpoAuth
         bool interactive,
         Prompt? prompt = null)
     {
+        // localhost の場合はダミーの AuthenticationResult を返す（モックサーバー用）
+        // 注: AuthenticationResult は sealed なので実際には使用されない想定
+        // CreateContextAsync で localhost チェックを行いトークン取得をスキップする
+        if (IsLocalhost(siteUrl))
+        {
+            // ダミーを返すが、実際には CreateContextAsync で使用されない
+            throw new NotSupportedException("Localhost does not require authentication. This should not be called.");
+        }
+
         var scopes = new[] { $"{UrlHelpers.GetTenantRoot(siteUrl)}/.default" };
         var accounts = await _app.GetAccountsAsync();
 
@@ -95,13 +110,27 @@ internal sealed class SpoAuth
         bool showExpiresOn = false,
         AuthenticationResult? tokenResult = null)
     {
-        var result = tokenResult ?? await AcquireTokenResultAsync(siteUrl, interactive);
-        if (showExpiresOn)
+        string token;
+        
+        // localhost の場合は認証をスキップ
+        if (IsLocalhost(siteUrl))
         {
-            DisplayExpiresOn(result);
+            token = "mock-token-for-localhost";
+            if (showExpiresOn)
+            {
+                Console.WriteLine("Using mock authentication for localhost");
+            }
+        }
+        else
+        {
+            var result = tokenResult ?? await AcquireTokenResultAsync(siteUrl, interactive);
+            if (showExpiresOn)
+            {
+                DisplayExpiresOn(result);
+            }
+            token = result.AccessToken;
         }
 
-        var token = result.AccessToken;
         var context = new ClientContext(siteUrl);
         context.ExecutingWebRequest += (_, e) =>
         {
@@ -115,5 +144,18 @@ internal sealed class SpoAuth
     {
         var local = result.ExpiresOn.LocalDateTime;
         Console.WriteLine($"Access token ExpiresOn (local): {local:yyyy-MM-dd HH:mm:ss}");
+    }
+
+    /// <summary>
+    /// URL が localhost を指しているかチェックする。
+    /// </summary>
+    private static bool IsLocalhost(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
     }
 }

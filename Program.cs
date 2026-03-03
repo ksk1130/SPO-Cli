@@ -23,8 +23,34 @@ static class Program
 			return ExitSuccess;
 		}
 
-		var command = args[0].ToLowerInvariant();
-		var rest = args.Length > 1 ? args[1..] : Array.Empty<string>();
+		// グローバルオプションを先に解析
+		bool recursiveFlag = false;
+		bool interactiveFlag = false;
+		var newArgs = new System.Collections.Generic.List<string>();
+		foreach (var arg in args)
+		{
+			if (arg.Equals("--recursive", StringComparison.OrdinalIgnoreCase))
+			{
+				recursiveFlag = true;
+			}
+			else if (arg.Equals("-i", StringComparison.OrdinalIgnoreCase) || arg.Equals("--interactive", StringComparison.OrdinalIgnoreCase))
+			{
+				interactiveFlag = true;
+			}
+			else
+			{
+				newArgs.Add(arg);
+			}
+		}
+
+		if (newArgs.Count == 0)
+		{
+			PrintHelp();
+			return ExitSuccess;
+		}
+
+		var command = newArgs[0].ToLowerInvariant();
+		var rest = newArgs.Count > 1 ? newArgs.Skip(1).ToArray() : Array.Empty<string>();
 
 		try
 		{
@@ -32,7 +58,7 @@ static class Program
 			{
 				"login" => await HandleLoginAsync(rest),
 				"ls" => await HandleListAsync(rest),
-				"cp" => await HandleCopyAsync(rest),
+				"cp" => await HandleCopyAsync(rest, recursiveFlag, interactiveFlag),
 				_ => HandleUnknown(command)
 			};
 		}
@@ -142,16 +168,37 @@ static class Program
 	/// <summary>
 	/// URL判定によりSPOとローカル間のコピーを実行する。
 	/// </summary>
-	private static async Task<int> HandleCopyAsync(string[] args)
+	private static async Task<int> HandleCopyAsync(string[] args, bool recursiveFlag = false, bool interactiveFlag = false)
 	{
-		if (args.Length != 2)
+		bool recursive = recursiveFlag;
+		bool interactive = interactiveFlag;
+		var argList = new System.Collections.Generic.List<string>();
+
+		// cp コマンド内での --recursive, -i フラグも解析（後方互換性のため）
+		foreach (var arg in args)
 		{
-			Console.Error.WriteLine("Usage: spo-cli cp <from> <to>");
+			if (arg.Equals("--recursive", StringComparison.OrdinalIgnoreCase))
+			{
+				recursive = true;
+			}
+			else if (arg.Equals("-i", StringComparison.OrdinalIgnoreCase) || arg.Equals("--interactive", StringComparison.OrdinalIgnoreCase))
+			{
+				interactive = true;
+			}
+			else
+			{
+				argList.Add(arg);
+			}
+		}
+
+		if (argList.Count != 2)
+		{
+			Console.Error.WriteLine("Usage: spo-cli [--recursive] cp <from> <to>");
 			return ExitUsageError;
 		}
 
-		var from = UrlHelpers.ExpandSpoShorthand(args[0]);
-		var to = UrlHelpers.ExpandSpoShorthand(args[1]);
+		var from = UrlHelpers.ExpandSpoShorthand(argList[0]);
+		var to = UrlHelpers.ExpandSpoShorthand(argList[1]);
 		var fromIsSpo = UrlHelpers.IsSpoUrl(from);
 		var toIsSpo = UrlHelpers.IsSpoUrl(to);
 
@@ -167,7 +214,7 @@ static class Program
 
 		if (fromIsSpo && !toIsSpo)
 		{
-			await ops.DownloadAsync(from, to);
+			await ops.DownloadAsync(from, to, recursive, interactive);
 			return ExitSuccess;
 		}
 
@@ -208,6 +255,10 @@ static class Program
 	{
 		Console.WriteLine("spo-cli - SharePoint Online CLI (CSOM)");
 		Console.WriteLine();
+		Console.WriteLine("Global Options:");
+		Console.WriteLine("  --recursive                    Enable recursive folder download");
+		Console.WriteLine("  -i, --interactive              Confirm before downloading files");
+		Console.WriteLine();
 		Console.WriteLine("Commands:");
 		Console.WriteLine("  login --site <site-url>        Login and cache token");
 		Console.WriteLine("  ls <site-or-folder-url>        List files/folders");
@@ -222,5 +273,7 @@ static class Program
 		Console.WriteLine("  spo-cli login --site https://contoso.sharepoint.com");
 		Console.WriteLine("  spo-cli ls https://contoso.sharepoint.com/sites/demo/Shared%20Documents");
 		Console.WriteLine("  spo-cli cp https://contoso.sharepoint.com/sites/demo/Shared%20Documents/a.txt .\\a.txt");
+		Console.WriteLine("  spo-cli --recursive cp https://contoso.sharepoint.com/sites/demo/Shared%20Documents/folder/ .\\local\\");
+		Console.WriteLine("  spo-cli --recursive -i cp https://contoso.sharepoint.com/sites/demo/Shared%20Documents/folder/ .\\local\\");
 	}
 }

@@ -13,4 +13,9 @@
     <PackageReference Include="Microsoft.SharePointOnline.CSOM" Version="16.1.26914.12004" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- MockSpoServerProgram を除外 -->
+    <Compile Remove="MockSpoServerProgram.cs" />
+  </ItemGroup>
+
 </Project>

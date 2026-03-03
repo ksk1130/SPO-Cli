@@ -6,7 +6,7 @@ SharePoint Online のファイル操作をCLIで(aws s3コマンド風に)実行
 
 - `login [--mfa]`
 - `ls <site-or-folder-url>`
-- `cp <from> <to>`
+- `cp [--recursive] <from> <to>`
 
 CSOMの対話ログインとMSALトークンキャッシュを使います。
 
@@ -106,3 +106,77 @@ dotnet run -- cp spo://フォルダA/ .\ローカルフォルダ\
 # ローカルフォルダ配下のすべてをアップロード
 dotnet run -- cp .\ローカルフォルダ\ spo://フォルダA/
 ```
+
+### 再帰ダウンロード（3階層まで）
+
+`--recursive` フラグを指定すると、フォルダを最大3階層まで再帰的にダウンロードできます：
+
+```bash
+# Shared Documents/root 配下を最大3階層までダウンロード
+# root/a.txt (1階層)
+# root/dirB/b.txt (2階層)
+# root/dirB/dirC/c.txt (3階層) ✅ ここまで
+# root/dirB/dirC/dirD/d.txt (4階層) ❌ スキップ
+dotnet run -- --recursive cp spo://root/ .\ローカルフォルダ\
+```
+
+#### ダウンロード確認（`-i` オプション）
+
+デフォルトではダウンロードリストを表示後、確認なしで即座にダウンロードを開始します。  
+`-i` または `--interactive` オプションを付けると、ダウンロード実行前に確認プロンプトが表示されます：
+
+```bash
+# 確認なし（デフォルト）でダウンロード
+dotnet run -- --recursive cp spo://folder/ .\local\
+
+# 確認付きでダウンロード
+dotnet run -- --recursive -i cp spo://folder/ .\local\
+```
+
+確認プロンプトの例：
+```
+Files to download (3):
+ 1. /sites/demo/Shared Documents/folder/a.txt -> .\local\a.txt
+ 2. /sites/demo/Shared Documents/folder/dirB/b.txt -> .\local\dirB\b.txt
+ 3. /sites/demo/Shared Documents/folder/dirB/dirC/c.txt -> .\local\dirB\dirC\c.txt
+
+Download 3 files recursively? (y/N): 
+```
+
+#### 特殊文字を含むフォルダ名のサポート
+
+CSOM の `ResourcePath.FromDecodedUrl` を使用した実装により、`#`（シャープ）などの特殊文字を含むフォルダ名・ファイル名も正しく処理できます：
+
+```bash
+# フォルダ名に # が含まれる場合も対応
+dotnet run -- --recursive cp "spo://フォルダ#1/サブフォルダ#2/" .\local\
+
+# URL にエンコード済みの形式でも対応（# → %23）
+dotnet run -- --recursive cp "spo://%E3%83%95%E3%82%A9%E3%83%AB%E3%83%80%231/" .\local\
+```
+
+対応している特殊文字の例：
+- `#` (シャープ)
+- `%` (パーセント)
+- スペース
+- 日本語を含むマルチバイト文字
+
+#### フラグの位置
+
+フラグの位置は柔軟に対応しています：
+```bash
+dotnet run -- --recursive cp spo://folder/ .\local\
+dotnet run -- cp --recursive spo://folder/ .\local\
+dotnet run -- cp spo://folder/ .\local\ --recursive
+
+# -i オプションとの併用
+dotnet run -- --recursive -i cp spo://folder/ .\local\
+dotnet run -- -i --recursive cp spo://folder/ .\local\
+```
+
+#### 注意事項
+
+- **`--recursive` はダウンロード時のみ対応** - アップロード時に `--recursive` を指定しても無視されます
+- **ダウンロード時にフォルダは自動作成** - ローカル側の対象ディレクトリが存在しない場合、自動的に作成されます
+- **フォルダ指定時は末尾の `/` が必須** - ローカル側が入出力の向きを判定するため、必ず末尾に `/` をつけてください
+- **ダウンロードリストは常に表示** - `-i` オプションの有無に関わらず、ダウンロード予定ファイルのリストが表示されます
