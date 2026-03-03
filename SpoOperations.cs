@@ -141,7 +141,7 @@ internal sealed class SpoOperations
     /// ダウンロードフロー：①リスト作成（CSOM） -> ②一括ダウンロード（CSOM）
     /// すべて CSOM 経由で処理することで、'#' 等の特殊文字を含むパスも正しく動作する。
     /// </summary>
-    public async Task DownloadAsync(string fromUrl, string toPath, bool recursive = false)
+    public async Task DownloadAsync(string fromUrl, string toPath, bool recursive = false, bool interactive = false)
     {
         var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
         var serverRelativeUrl = UrlHelpers.GetServerRelativeUrl(fromUrl);
@@ -208,7 +208,7 @@ internal sealed class SpoOperations
 
         PrintDownloadList(downloadList);
 
-        if (recursive && !ConfirmRecursiveDownload(downloadList.Count))
+        if (interactive && !ConfirmRecursiveDownload(downloadList.Count))
         {
             Console.WriteLine("Download canceled.");
             return;
