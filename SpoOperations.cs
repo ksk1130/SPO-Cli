@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
@@ -11,7 +12,21 @@ using Microsoft.SharePoint.Client.Utilities;
 /// <summary>
 /// ダウンロード対象アイテムの情報
 /// </summary>
-internal record DownloadItem(string ServerRelativeUrl, string LocalPath, long FileLength, string FileName);
+internal sealed class DownloadItem
+{
+    public string ServerRelativeUrl { get; private set; }
+    public string LocalPath { get; private set; }
+    public long FileLength { get; private set; }
+    public string FileName { get; private set; }
+
+    public DownloadItem(string serverRelativeUrl, string localPath, long fileLength, string fileName)
+    {
+        ServerRelativeUrl = serverRelativeUrl;
+        LocalPath = localPath;
+        FileLength = fileLength;
+        FileName = fileName;
+    }
+}
 
 /// <summary>
 /// 一覧表示とコピーのCSOM操作を実装する。
@@ -31,25 +46,26 @@ internal sealed class SpoOperations
     public async Task ListAsync(string targetUrl)
     {
         var siteUrl = UrlHelpers.GetSiteUrl(targetUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true);
-
-        var folderUrl = UrlHelpers.GetServerRelativeUrl(targetUrl);
-        var folder = context.Web.GetFolderByServerRelativeUrl(folderUrl);
-        context.Load(folder, f => f.Name, f => f.ServerRelativeUrl);
-        context.Load(folder.Folders,
-            folders => folders.Include(f => f.Name, f => f.ServerRelativeUrl, f => f.TimeLastModified));
-        context.Load(folder.Files,
-            files => files.Include(f => f.Name, f => f.ServerRelativeUrl, f => f.TimeLastModified, f => f.Length));
-        context.ExecuteQuery();
-
-        foreach (var subFolder in folder.Folders)
+        using (var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true))
         {
-            Console.WriteLine($"[D] {subFolder.Name}\t{subFolder.TimeLastModified:yyyy-MM-dd HH:mm}");
-        }
+            var folderUrl = UrlHelpers.GetServerRelativeUrl(targetUrl);
+            var folder = context.Web.GetFolderByServerRelativeUrl(folderUrl);
+            context.Load(folder, f => f.Name, f => f.ServerRelativeUrl);
+            context.Load(folder.Folders,
+                folders => folders.Include(f => f.Name, f => f.ServerRelativeUrl, f => f.TimeLastModified));
+            context.Load(folder.Files,
+                files => files.Include(f => f.Name, f => f.ServerRelativeUrl, f => f.TimeLastModified, f => f.Length));
+            context.ExecuteQuery();
 
-        foreach (var file in folder.Files)
-        {
-            Console.WriteLine($"[F] {file.Name}\t{file.Length}\t{file.TimeLastModified:yyyy-MM-dd HH:mm}");
+            foreach (var subFolder in folder.Folders)
+            {
+                Console.WriteLine(string.Format("[D] {0}\t{1:yyyy-MM-dd HH:mm}", subFolder.Name, subFolder.TimeLastModified));
+            }
+
+            foreach (var file in folder.Files)
+            {
+                Console.WriteLine(string.Format("[F] {0}\t{1}\t{2:yyyy-MM-dd HH:mm}", file.Name, file.Length, file.TimeLastModified));
+            }
         }
     }
 
@@ -65,29 +81,33 @@ internal sealed class SpoOperations
 
         var targetFileUrl = NormalizeTargetFileUrl(fromPath, toUrl);
         var siteUrl = UrlHelpers.GetSiteUrl(targetFileUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true);
-
-        var serverRelative = UrlHelpers.GetServerRelativeUrl(targetFileUrl);
-        var folderPath = serverRelative[..serverRelative.LastIndexOf('/')];
-        if (string.IsNullOrWhiteSpace(folderPath))
+        using (var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true))
         {
-            folderPath = "/";
+            var serverRelative = UrlHelpers.GetServerRelativeUrl(targetFileUrl);
+            var lastSlash = serverRelative.LastIndexOf('/');
+            var folderPath = lastSlash >= 0 ? serverRelative.Substring(0, lastSlash) : serverRelative;
+            if (string.IsNullOrWhiteSpace(folderPath))
+            {
+                folderPath = "/";
+            }
+
+            var folder = context.Web.GetFolderByServerRelativeUrl(folderPath);
+            var fileInfo = new FileInfo(fromPath);
+            using (var sourceStream = System.IO.File.OpenRead(fromPath))
+            using (var progressStream = new ProgressStream(sourceStream, fileInfo.Length, Path.GetFileName(fromPath)))
+            {
+                var info = new FileCreationInformation
+                {
+                    ContentStream = progressStream,
+                    Url = Path.GetFileName(serverRelative),
+                    Overwrite = true
+                };
+
+                folder.Files.Add(info);
+                context.ExecuteQuery();
+                Console.Error.WriteLine();
+            }
         }
-
-        var folder = context.Web.GetFolderByServerRelativeUrl(folderPath);
-        var fileInfo = new FileInfo(fromPath);
-        using var sourceStream = System.IO.File.OpenRead(fromPath);
-        using var progressStream = new ProgressStream(sourceStream, fileInfo.Length, Path.GetFileName(fromPath));
-        var info = new FileCreationInformation
-        {
-            ContentStream = progressStream,
-            Url = Path.GetFileName(serverRelative),
-            Overwrite = true
-        };
-
-        folder.Files.Add(info);
-        context.ExecuteQuery();
-        Console.Error.WriteLine();
     }
 
     /// <summary>
@@ -123,18 +143,19 @@ internal sealed class SpoOperations
     {
         var targetFileUrl = NormalizeTargetFileUrl(fromUrl, toUrl);
         var siteUrl = UrlHelpers.GetSiteUrl(fromUrl);
-        using var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true);
-
-        var sourcePath = ResourcePath.FromDecodedUrl(UrlHelpers.GetServerRelativeUrl(fromUrl));
-        var targetPath = ResourcePath.FromDecodedUrl(UrlHelpers.GetServerRelativeUrl(targetFileUrl));
-        var options = new MoveCopyOptions
+        using (var context = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: true))
         {
-            KeepBoth = false,
-            ResetAuthorAndCreatedOnCopy = false
-        };
+            var sourcePath = ResourcePath.FromDecodedUrl(UrlHelpers.GetServerRelativeUrl(fromUrl));
+            var targetPath = ResourcePath.FromDecodedUrl(UrlHelpers.GetServerRelativeUrl(targetFileUrl));
+            var options = new MoveCopyOptions
+            {
+                KeepBoth = false,
+                ResetAuthorAndCreatedOnCopy = false
+            };
 
-        MoveCopyUtil.CopyFileByPath(context, sourcePath, targetPath, overwrite: true, options: options);
-        context.ExecuteQuery();
+            MoveCopyUtil.CopyFileByPath(context, sourcePath, targetPath, overwrite: true, options: options);
+            context.ExecuteQuery();
+        }
     }
 
     /// <summary>
@@ -154,75 +175,76 @@ internal sealed class SpoOperations
         bool isFolder = false;
 
         // CSOM コンテキストをフォルダ列挙・ファイルダウンロード両方で共用する
-        using var csomContext = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: false);
-
-        if (!looksLikeFile)
+        using (var csomContext = await _auth.CreateContextAsync(siteUrl, interactive: false, showExpiresOn: false))
         {
-            try
+            if (!looksLikeFile)
             {
-                BuildDownloadListWithCsom(csomContext, serverRelativeUrl, serverRelativeUrl, toPath, downloadList, recursive ? 3 : 0);
-                isFolder = true;
-            }
-            catch
-            {
-                isFolder = false;
-            }
-        }
-
-        // ② フォルダでない場合はファイルとして処理（CSOM 経由）
-        if (!isFolder)
-        {
-            try
-            {
-                var resolvedPath = ResolveLocalPathForDownload(fromUrl, toPath);
-                var resolvedDir = Path.GetDirectoryName(resolvedPath);
-                if (!string.IsNullOrEmpty(resolvedDir))
+                try
                 {
-                    Directory.CreateDirectory(resolvedDir);
+                    BuildDownloadListWithCsom(csomContext, serverRelativeUrl, serverRelativeUrl, toPath, downloadList, recursive ? 3 : 0);
+                    isFolder = true;
                 }
+                catch
+                {
+                    isFolder = false;
+                }
+            }
 
-                // CSOM でファイルサイズを取得してダウンロード
-                var fileRef = csomContext.Web.GetFileByServerRelativePath(ResourcePath.FromDecodedUrl(serverRelativeUrl));
-                csomContext.Load(fileRef, f => f.Length);
-                csomContext.ExecuteQuery();
-                var fileLength = fileRef.Length;
+            // ② フォルダでない場合はファイルとして処理（CSOM 経由）
+            if (!isFolder)
+            {
+                try
+                {
+                    var resolvedPath = ResolveLocalPathForDownload(fromUrl, toPath);
+                    var resolvedDir = Path.GetDirectoryName(resolvedPath);
+                    if (!string.IsNullOrEmpty(resolvedDir))
+                    {
+                        Directory.CreateDirectory(resolvedDir);
+                    }
 
-                DownloadFileWithCsom(csomContext, serverRelativeUrl, resolvedPath, fileLength, fileName);
-                Console.WriteLine("Download completed successfully.");
+                    // CSOM でファイルサイズを取得してダウンロード
+                    var fileRef = csomContext.Web.GetFileByServerRelativePath(ResourcePath.FromDecodedUrl(serverRelativeUrl));
+                    csomContext.Load(fileRef, f => f.Length);
+                    csomContext.ExecuteQuery();
+                    var fileLength = fileRef.Length;
+
+                    DownloadFileWithCsom(csomContext, serverRelativeUrl, resolvedPath, fileLength, fileName);
+                    Console.WriteLine("Download completed successfully.");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine("[Error] Neither file nor folder found: " + serverRelativeUrl);
+                    Console.Error.WriteLine("[Error] " + ex.Message);
+                    throw;
+                }
+            }
+
+            // ③ フォルダからのダウンロード（CSOM 経由）
+            if (downloadList.Count == 0)
+            {
+                Console.WriteLine("No files found to download.");
                 return;
             }
-            catch (Exception ex)
+
+            PrintDownloadList(downloadList);
+
+            if (interactive && !ConfirmRecursiveDownload(downloadList.Count))
             {
-                Console.Error.WriteLine($"[Error] Neither file nor folder found: {serverRelativeUrl}");
-                Console.Error.WriteLine($"[Error] {ex.Message}");
-                throw;
+                Console.WriteLine("Download canceled.");
+                return;
             }
+
+            foreach (var item in downloadList)
+            {
+                var dir = Path.GetDirectoryName(item.LocalPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+                Console.WriteLine(item.LocalPath);
+                DownloadFileWithCsom(csomContext, item.ServerRelativeUrl, item.LocalPath, item.FileLength, item.FileName);
+            }
+            Console.WriteLine("Download completed successfully.");
         }
-
-        // ③ フォルダからのダウンロード（CSOM 経由）
-        if (downloadList.Count == 0)
-        {
-            Console.WriteLine("No files found to download.");
-            return;
-        }
-
-        PrintDownloadList(downloadList);
-
-        if (interactive && !ConfirmRecursiveDownload(downloadList.Count))
-        {
-            Console.WriteLine("Download canceled.");
-            return;
-        }
-
-        foreach (var item in downloadList)
-        {
-            var dir = Path.GetDirectoryName(item.LocalPath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-            Console.WriteLine(item.LocalPath);
-            DownloadFileWithCsom(csomContext, item.ServerRelativeUrl, item.LocalPath, item.FileLength, item.FileName);
-        }
-        Console.WriteLine("Download completed successfully.");
     }
 
     /// <summary>
@@ -243,14 +265,16 @@ internal sealed class SpoOperations
             var streamResult = fileRef.OpenBinaryStream();
             context.ExecuteQuery();
 
-            using var sourceStream = streamResult.Value;
-            using var targetStream = System.IO.File.Create(localPath);
-            CopyStreamWithProgress(sourceStream, targetStream, fileLength, fileName);
+            using (var sourceStream = streamResult.Value)
+            using (var targetStream = System.IO.File.Create(localPath))
+            {
+                CopyStreamWithProgress(sourceStream, targetStream, fileLength, fileName);
+            }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Error] Failed to download: {serverRelativeUrl}");
-            Console.Error.WriteLine($"[Error] Exception: {ex.Message}");
+            Console.Error.WriteLine("[Error] Failed to download: " + serverRelativeUrl);
+            Console.Error.WriteLine("[Error] Exception: " + ex.Message);
             throw;
         }
     }
@@ -290,38 +314,45 @@ internal sealed class SpoOperations
         context.ExecuteQuery();
 
         // ファイル情報を先に収集（ExecuteQuery 後にプロキシ値を読み取る）
-        var fileInfos = folder.Files.AsEnumerable()
-            .Select(f => (name: f.Name, url: f.ServerRelativeUrl, length: f.Length))
-            .ToList();
-
-        foreach (var (name, url, length) in fileInfos)
+        var fileInfos = new List<DownloadItem>();
+        foreach (var file in folder.Files)
         {
-            var localPath = Path.Combine(localDir, name);
-            list.Add(new DownloadItem(url, localPath, length, name));
+            var localPath = Path.Combine(localDir, file.Name);
+            fileInfos.Add(new DownloadItem(file.ServerRelativeUrl, localPath, file.Length, file.Name));
+        }
+
+        foreach (var fileInfo in fileInfos)
+        {
+            list.Add(fileInfo);
         }
 
         if (currentDepth < maxDepth)
         {
             // サブフォルダ情報も収集してから再帰（プロキシオブジェクトを次の ExecuteQuery 前に退避）
-            var subFolders = folder.Folders.AsEnumerable()
-                .Select(f => (name: f.Name, url: f.ServerRelativeUrl))
-                .Where(f => f.name != "Forms")
-                .ToList();
-
-            foreach (var (_, url) in subFolders)
+            var subFolderUrls = new List<string>();
+            foreach (var subFolder in folder.Folders)
             {
-                BuildDownloadListWithCsom(context, url, baseServerRelativeUrl, baseLocalDir, list, maxDepth, currentDepth + 1);
+                if (!subFolder.Name.Equals("Forms", StringComparison.Ordinal))
+                {
+                    subFolderUrls.Add(subFolder.ServerRelativeUrl);
+                }
+            }
+
+            foreach (var subFolderUrl in subFolderUrls)
+            {
+                BuildDownloadListWithCsom(context, subFolderUrl, baseServerRelativeUrl, baseLocalDir, list, maxDepth, currentDepth + 1);
             }
         }
     }
     /// <summary>
     /// PascalCase / camelCase の両キーを試みて string を返す。
     /// </summary>
-    private static string? GetStringProperty(System.Text.Json.JsonElement el, params string[] keys)
+    private static string GetStringProperty(System.Text.Json.JsonElement el, params string[] keys)
     {
         foreach (var key in keys)
         {
-            if (el.TryGetProperty(key, out var prop) && prop.ValueKind == System.Text.Json.JsonValueKind.String)
+            System.Text.Json.JsonElement prop;
+            if (el.TryGetProperty(key, out prop) && prop.ValueKind == System.Text.Json.JsonValueKind.String)
                 return prop.GetString();
         }
         return null;
@@ -334,14 +365,21 @@ internal sealed class SpoOperations
     {
         foreach (var key in keys)
         {
-            if (el.TryGetProperty(key, out var prop))
+            System.Text.Json.JsonElement prop;
+            if (el.TryGetProperty(key, out prop))
             {
                 if (prop.ValueKind == System.Text.Json.JsonValueKind.Number)
                     return prop.GetInt64();
                 // SPO は Length を文字列で返すこともある
                 if (prop.ValueKind == System.Text.Json.JsonValueKind.String
-                    && long.TryParse(prop.GetString(), out var parsed))
+                    )
+                {
+                    long parsed;
+                    if (long.TryParse(prop.GetString(), out parsed))
+                    {
                     return parsed;
+                    }
+                }
             }
         }
         return 0;
@@ -352,11 +390,11 @@ internal sealed class SpoOperations
     /// </summary>
     private static void PrintDownloadList(IReadOnlyList<DownloadItem> downloadList)
     {
-        Console.WriteLine($"\nFiles to download ({downloadList.Count}):");
+        Console.WriteLine("\nFiles to download (" + downloadList.Count + "):");
         for (int i = 0; i < downloadList.Count; i++)
         {
             var item = downloadList[i];
-            Console.WriteLine($"{i + 1,2}. {item.ServerRelativeUrl} -> {item.LocalPath}");
+            Console.WriteLine(string.Format("{0,2}. {1} -> {2}", i + 1, item.ServerRelativeUrl, item.LocalPath));
         }
         Console.WriteLine();
     }
@@ -366,7 +404,7 @@ internal sealed class SpoOperations
     /// </summary>
     private static bool ConfirmRecursiveDownload(int fileCount)
     {
-        Console.Write($"Download {fileCount} files recursively? (y/N): ");
+        Console.Write("Download " + fileCount + " files recursively? (y/N): ");
         var input = Console.ReadLine();
         if (string.IsNullOrWhiteSpace(input))
         {
@@ -395,7 +433,7 @@ internal sealed class SpoOperations
             return relative.Replace('/', Path.DirectorySeparatorChar);
         }
 
-        throw new InvalidOperationException($"Path '{fullPath}' is not under base path '{basePath}'");
+        throw new InvalidOperationException("Path '" + fullPath + "' is not under base path '" + basePath + "'");
     }
 
     /// <summary>
@@ -404,8 +442,8 @@ internal sealed class SpoOperations
     private static string ResolveLocalPathForDownload(string fromUrl, string toPath)
     {
         if (Directory.Exists(toPath)
-            || toPath.EndsWith(Path.DirectorySeparatorChar)
-            || toPath.EndsWith(Path.AltDirectorySeparatorChar))
+            || toPath.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            || toPath.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal))
         {
             return Path.Combine(toPath, UrlHelpers.GetFileName(fromUrl));
         }
@@ -418,7 +456,8 @@ internal sealed class SpoOperations
     /// </summary>
     private static bool IsLocalhost(string url)
     {
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        Uri uri;
+        if (Uri.TryCreate(url, UriKind.Absolute, out uri))
         {
             return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
                 || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
@@ -434,7 +473,7 @@ internal sealed class SpoOperations
         var uri = new Uri(fromUrl);
         var localPath = MapLocalhostUrlToLocalPath(uri.AbsolutePath);
 
-        Console.Error.WriteLine($"[Debug] Looking for testdata at: {Path.GetFullPath(localPath)}");
+        Console.Error.WriteLine("[Debug] Looking for testdata at: " + Path.GetFullPath(localPath));
 
         if (System.IO.File.Exists(localPath))
         {
@@ -446,7 +485,7 @@ internal sealed class SpoOperations
                 Directory.CreateDirectory(destinationDir);
             }
             System.IO.File.Copy(localPath, destination, overwrite: true);
-            Console.Error.WriteLine($"Downloaded: {Path.GetFileName(destination)}");
+            Console.Error.WriteLine("Downloaded: " + Path.GetFileName(destination));
         }
         else if (Directory.Exists(localPath))
         {
@@ -462,7 +501,7 @@ internal sealed class SpoOperations
         }
         else
         {
-            throw new InvalidOperationException($"Path not found: {Path.GetFullPath(localPath)}");
+            throw new InvalidOperationException("Path not found: " + Path.GetFullPath(localPath));
         }
     }
 
@@ -479,7 +518,7 @@ internal sealed class SpoOperations
             var fileName = Path.GetFileName(file);
             var destination = Path.Combine(targetPath, fileName);
             System.IO.File.Copy(file, destination, overwrite: true);
-            Console.Error.WriteLine($"Downloaded: {fileName}");
+            Console.Error.WriteLine("Downloaded: " + fileName);
         }
     }
 
@@ -502,7 +541,7 @@ internal sealed class SpoOperations
             var fileName = Path.GetFileName(file);
             var destination = Path.Combine(targetPath, fileName);
             System.IO.File.Copy(file, destination, overwrite: true);
-            Console.Error.WriteLine($"Downloaded: {fileName}");
+            Console.Error.WriteLine("Downloaded: " + fileName);
         }
 
         // サブフォルダを再帰処理
@@ -533,7 +572,11 @@ internal sealed class SpoOperations
 
         // 実行可能ファイルのディレクトリを基準に testdata を探す
         var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-        var exeDir = Path.GetDirectoryName(exePath) ?? ".";
+        var exeDir = Path.GetDirectoryName(exePath);
+        if (string.IsNullOrEmpty(exeDir))
+        {
+            exeDir = ".";
+        }
 
         // publish フォルダから実行される場合: bin\publish\ -> ..\..\testdata\ で SPO-Cli\testdata に到達
         var testDataPath = Path.Combine(exeDir, "..", "..", "testdata", normalized);
@@ -594,7 +637,7 @@ internal sealed class SpoOperations
         var bar = new string('#', filled) + new string('-', barWidth - filled);
         var currentMB = current / 1024.0 / 1024.0;
         var totalMB = total / 1024.0 / 1024.0;
-        Console.Error.Write($"\r{fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.Write(string.Format("\r{0}: [{1}] {2}% {3:F2}MB/{4:F2}MB", fileName, bar, percent, currentMB, totalMB));
         Console.Error.Flush();
     }
 }
@@ -617,14 +660,14 @@ internal sealed class ProgressStream : Stream
         _fileName = fileName;
     }
 
-    public override bool CanRead => _baseStream.CanRead;
-    public override bool CanSeek => _baseStream.CanSeek;
-    public override bool CanWrite => false;
-    public override long Length => _baseStream.Length;
+    public override bool CanRead { get { return _baseStream.CanRead; } }
+    public override bool CanSeek { get { return _baseStream.CanSeek; } }
+    public override bool CanWrite { get { return false; } }
+    public override long Length { get { return _baseStream.Length; } }
     public override long Position
     {
-        get => _baseStream.Position;
-        set => _baseStream.Position = value;
+        get { return _baseStream.Position; }
+        set { _baseStream.Position = value; }
     }
 
     public override int Read(byte[] buffer, int offset, int count)
@@ -649,14 +692,14 @@ internal sealed class ProgressStream : Stream
         var bar = new string('#', filled) + new string('-', barWidth - filled);
         var currentMB = _bytesRead / 1024.0 / 1024.0;
         var totalMB = _totalBytes / 1024.0 / 1024.0;
-        Console.Error.Write($"\r{_fileName}: [{bar}] {percent}% {currentMB:F2}MB/{totalMB:F2}MB");
+        Console.Error.Write(string.Format("\r{0}: [{1}] {2}% {3:F2}MB/{4:F2}MB", _fileName, bar, percent, currentMB, totalMB));
         Console.Error.Flush();
     }
 
-    public override void Flush() => _baseStream.Flush();
-    public override long Seek(long offset, SeekOrigin origin) => _baseStream.Seek(offset, origin);
-    public override void SetLength(long value) => _baseStream.SetLength(value);
-    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override void Flush() { _baseStream.Flush(); }
+    public override long Seek(long offset, SeekOrigin origin) { return _baseStream.Seek(offset, origin); }
+    public override void SetLength(long value) { _baseStream.SetLength(value); }
+    public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
 
     protected override void Dispose(bool disposing)
     {

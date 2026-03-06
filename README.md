@@ -40,6 +40,13 @@ CLI用のアプリ登録を作成し、パブリッククライアントとし�
 dotnet build
 ```
 
+`SpoCli` は `net48` と `net10.0` のマルチターゲットです。個別にビルドする場合は以下を使用します。
+
+```
+dotnet build .\SpoCli.csproj -f net48
+dotnet build .\SpoCli.csproj -f net10.0
+```
+
 ## 実行
 
 ```

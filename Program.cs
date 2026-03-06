@@ -1,4 +1,6 @@
 ﻿using System;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Identity.Client;
 
@@ -15,7 +17,12 @@ static class Program
 	/// <summary>
 	/// 引数を解析して各コマンドに振り分ける。
 	/// </summary>
-	public static async Task<int> Main(string[] args)
+	public static int Main(string[] args)
+	{
+		return MainAsync(args).GetAwaiter().GetResult();
+	}
+
+	private static async Task<int> MainAsync(string[] args)
 	{
 		if (args.Length == 0 || IsHelp(args[0]))
 		{
@@ -54,13 +61,17 @@ static class Program
 
 		try
 		{
-			return command switch
+			switch (command)
 			{
-				"login" => await HandleLoginAsync(rest),
-				"ls" => await HandleListAsync(rest),
-				"cp" => await HandleCopyAsync(rest, recursiveFlag, interactiveFlag),
-				_ => HandleUnknown(command)
-			};
+				case "login":
+					return await HandleLoginAsync(rest);
+				case "ls":
+					return await HandleListAsync(rest);
+				case "cp":
+					return await HandleCopyAsync(rest, recursiveFlag, interactiveFlag);
+				default:
+					return HandleUnknown(command);
+			}
 		}
 		catch (MsalUiRequiredException)
 		{
@@ -74,7 +85,7 @@ static class Program
 		}
 		catch (Exception ex)
 		{
-			Console.Error.WriteLine($"Error: {ex.Message}");
+			Console.Error.WriteLine("Error: " + ex.Message);
 			return ExitUnhandledError;
 		}
 	}
@@ -84,7 +95,7 @@ static class Program
 	/// </summary>
 	private static async Task<int> HandleLoginAsync(string[] args)
 	{
-		string? siteUrl = null;
+		string siteUrl = null;
 		for (var i = 0; i < args.Length; i++)
 		{
 			if (args[i].Equals("--site", StringComparison.OrdinalIgnoreCase))
@@ -102,7 +113,7 @@ static class Program
 			}
 			else
 			{
-				throw new InvalidOperationException($"Unknown option: {args[i]}");
+				throw new InvalidOperationException("Unknown option: " + args[i]);
 			}
 		}
 
@@ -136,7 +147,7 @@ static class Program
 		settings.Save();
 
 		Console.WriteLine("Login succeeded.");
-		Console.WriteLine($"Default root: {normalizedSiteUrl}");
+		Console.WriteLine("Default root: " + normalizedSiteUrl);
 		return ExitSuccess;
 	}
 
@@ -233,7 +244,7 @@ static class Program
 	/// </summary>
 	private static int HandleUnknown(string command)
 	{
-		Console.Error.WriteLine($"Unknown command: {command}");
+		Console.Error.WriteLine("Unknown command: " + command);
 		PrintHelp();
 		return ExitUsageError;
 	}

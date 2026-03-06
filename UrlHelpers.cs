@@ -48,9 +48,10 @@ internal static class UrlHelpers
 	/// </summary>
 	public static bool IsSpoUrl(string value)
 	{
-		return TryParseUri(value, out var uri)
+        Uri uri;
+        return TryParseUri(value, out uri)
 			&& (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
-			&& (uri.Host.Contains("sharepoint.com", StringComparison.OrdinalIgnoreCase)
+            && (uri.Host.IndexOf("sharepoint.com", StringComparison.OrdinalIgnoreCase) >= 0
 				|| uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
 				|| uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase));
 	}
@@ -61,7 +62,7 @@ internal static class UrlHelpers
     public static string GetTenantRoot(string url)
     {
         var uri = ParseUri(url);
-        return $"{uri.Scheme}://{uri.Authority}";
+        return uri.Scheme + "://" + uri.Authority;
     }
 
     /// <summary>
@@ -81,17 +82,17 @@ internal static class UrlHelpers
     public static string GetSiteUrl(string url)
     {
         var uri = ParseUri(url);
-        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var segments = uri.AbsolutePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
         var sitePath = string.Empty;
 
         if (segments.Length >= 2
             && (segments[0].Equals("sites", StringComparison.OrdinalIgnoreCase)
                 || segments[0].Equals("teams", StringComparison.OrdinalIgnoreCase)))
         {
-            sitePath = $"/{segments[0]}/{segments[1]}";
+            sitePath = "/" + segments[0] + "/" + segments[1];
         }
 
-        var result = $"{uri.Scheme}://{uri.Authority}{sitePath}";
+        var result = uri.Scheme + "://" + uri.Authority + sitePath;
         //Console.Error.WriteLine($"[Debug] GetSiteUrl: url={url} -> segments={string.Join(",", segments)} -> result={result}");
         return result;
     }
@@ -123,7 +124,7 @@ internal static class UrlHelpers
     {
         if (!baseUrl.EndsWith("/", StringComparison.Ordinal))
         {
-            return $"{baseUrl}/{relative}";
+            return baseUrl + "/" + relative;
         }
 
         return baseUrl + relative;
@@ -140,12 +141,13 @@ internal static class UrlHelpers
 
     private static Uri ParseUri(string value)
     {
-        if (TryParseUri(value, out var uri))
+        Uri uri;
+        if (TryParseUri(value, out uri))
         {
             return uri;
         }
 
-        throw new InvalidOperationException($"Invalid URL: {value}");
+        throw new InvalidOperationException("Invalid URL: " + value);
     }
 
     private static bool TryParseUri(string value, out Uri uri)
