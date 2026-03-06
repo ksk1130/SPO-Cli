@@ -74,7 +74,7 @@ internal sealed class SpoAuth
             throw new NotSupportedException("Localhost does not require authentication. This should not be called.");
         }
 
-        var scopes = new[] { $"{UrlHelpers.GetTenantRoot(siteUrl)}/.default" };
+        var scopes = new[] { UrlHelpers.GetTenantRoot(siteUrl) + "/.default" };
         var accounts = await _app.GetAccountsAsync();
 
         try
@@ -93,12 +93,12 @@ internal sealed class SpoAuth
             {
                 throw;
             }
-
-            var effectivePrompt = prompt ?? Prompt.SelectAccount;
-            return await _app.AcquireTokenInteractive(scopes)
-                .WithPrompt(effectivePrompt)
-                .ExecuteAsync();
         }
+
+        var effectivePrompt = prompt ?? Prompt.SelectAccount;
+        return await _app.AcquireTokenInteractive(scopes)
+            .WithPrompt(effectivePrompt)
+            .ExecuteAsync();
     }
 
     /// <summary>
@@ -108,7 +108,7 @@ internal sealed class SpoAuth
         string siteUrl,
         bool interactive,
         bool showExpiresOn = false,
-        AuthenticationResult? tokenResult = null)
+        AuthenticationResult tokenResult = null)
     {
         string token;
         
@@ -134,7 +134,7 @@ internal sealed class SpoAuth
         var context = new ClientContext(siteUrl);
         context.ExecutingWebRequest += (_, e) =>
         {
-            e.WebRequestExecutor.RequestHeaders["Authorization"] = $"Bearer {token}";
+            e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + token;
         };
 
         return context;
@@ -143,7 +143,7 @@ internal sealed class SpoAuth
     private static void DisplayExpiresOn(AuthenticationResult result)
     {
         var local = result.ExpiresOn.LocalDateTime;
-        Console.WriteLine($"Access token ExpiresOn (local): {local:yyyy-MM-dd HH:mm:ss}");
+        Console.WriteLine(string.Format("Access token ExpiresOn (local): {0:yyyy-MM-dd HH:mm:ss}", local));
     }
 
     /// <summary>
@@ -151,7 +151,8 @@ internal sealed class SpoAuth
     /// </summary>
     private static bool IsLocalhost(string url)
     {
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        Uri uri;
+        if (Uri.TryCreate(url, UriKind.Absolute, out uri))
         {
             return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
                 || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);

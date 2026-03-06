@@ -9,7 +9,7 @@ internal sealed class SpoCliSettings
 {
 	private const string SettingsFileName = "config.json";
 
-	public string? DefaultRoot { get; set; }
+	public string DefaultRoot { get; set; }
 
 	private static string GetSettingsPath()
 	{

@@ -5,8 +5,8 @@ using System;
 /// </summary>
 internal sealed class SpoCliConfig
 {
-    public string ClientId { get; }
-    public string TenantId { get; }
+    public string ClientId { get; private set; }
+    public string TenantId { get; private set; }
 
     private SpoCliConfig(string clientId, string tenantId)
     {
